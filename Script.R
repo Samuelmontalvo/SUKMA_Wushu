@@ -14,6 +14,7 @@ library(interlimb)
 library(caret)
 library(ggpubr)
 library(ggridges)
+library(plotly)
 ## Reduce jump trials to average
 Df_average <- Df %>% filter(TestId == "AVERAGE")
 View(Df_average)
@@ -51,7 +52,7 @@ write.csv(Df,"C:\\Users\\Samuel\\OneDrive\\Documents\\R\\SUKMA_Wushu\\SUKMA_Wush
 
 ## QQ PLOTS
 
-Df %>%  ggplot(aes(y=mu.sd,group=sex,fill=sex)) +
+Df %>% ggplot(aes(y=jump_height,group=sex,fill=sex)) +
   geom_density_ridges(alpha=.5) +
   ggtitle("CMJ") +
   xlab("sec") + ylab("") + geom_density_ridges(quantile_lines=TRUE,quantile_fun=function(x,...)mean(x),
@@ -60,35 +61,32 @@ Df %>%  ggplot(aes(y=mu.sd,group=sex,fill=sex)) +
                       alpha = 0.2) + theme_prism()
 ggsave("qqplot_FP.png")
 
-Df_sex <- Df %>% select(sex,jump_height)
-
-Df_male <- Df_sex %>% filter(sex=="Male")
-
-Df_female <- Df_sex %>% filter(sex=="Female")
-
-
-mu.sd_male <- as.data.frame((Df_male$jump_height - mean(Df_male$jump_height)) /sd(Df_male$jump_height))
-
-mu.sd_male <- mu.sd_male %>%
-  rename(Tscore =  "(Df_male$jump_height - mean(Df_male$jump_height))/sd(Df_male$jump_height)")
-
-mu.sd_male <- cbind(mu.sd_male,Df_male)
-
-t_male_plot <- mu.sd_male %>% ggplot(aes(Tscore)) + geom_density() + theme_prism()
 
 
 
-mu.sd_female <- as.data.frame((Df_female$jump_height - mean(Df_female$jump_height)) /sd(Df_female$jump_height))
 
-mu.sd_female <- mu.sd_female %>%
-  rename(Tscore =  "(Df_female$jump_height - mean(Df_female$jump_height))/sd(Df_female$jump_height)")
+p1 <- Df_female %>% ggplot(y=jump_height,x=zscore) +
+  geom_point(aes(y=jump_height,x=zscore,colour=Description),
+             position = position_jitter(width = .25), size = 3, shape=20) +
+   scale_color_manual(values = c("#125016", "#1b7821", "#24a02c",
+                                "#125016", "#000000", "#e7b416",
+                                "#CC3232","#a32828","#7a1e1e")) +
+  theme_bw() + labs(title ="Females", y="Jump Height (m)")
 
-mu.sd_female <- cbind(mu.sd_female,Df_female)
+ggplotly(p1)
 
-t_female_plot <- mu.sd_female %>% ggplot(aes(Tscore)) + geom_density() + theme_prism()
+p2 <- Df_male %>% ggplot(y=jump_height,x=zscore) +
+  geom_point(aes(y=jump_height,x=zscore,colour=Description,shape = Classification),
+             position = position_jitter(width = .2), size = 3) +
+  scale_color_manual(values = c("#125016", "#1b7821", "#24a02c",
+                                "#2dc937", "#000000", "#e7b416",
+                                "#CC3232","#a32828","#7a1e1e")) +
+  theme_bw() + labs(title ="Male",y="Jump Height (m)")
 
-ggarrange(t_male_plot,t_female_plot, ncol = 1)
+ggplotly(p2)
 
+library(ggpubr)
+ggarrange(p1,p2)
 ## Average Jump height by Sex
 Df %>% ggplot(aes(x = sex, y = jump_height, fill = sex)) +
   geom_flat_violin(aes(fill = sex),
@@ -119,6 +117,7 @@ Df %>% ggplot(aes(x = events, y = jump_height, fill = sex)) +
   scale_fill_brewer(palette = "Dark2")+ theme_bw() +
   ylab('Vertical Jump Height (m)')+
   xlab('Group') + theme_prism()
+ggsave("Vertical_jump_height_bygroup_bysex.png")
 
 
 Df %>% ggplot(aes(x = events, y = jump_height, fill = events)) +
@@ -133,7 +132,13 @@ Df %>% ggplot(aes(x = events, y = jump_height, fill = events)) +
   scale_fill_brewer(palette = "Dark2")+ theme_bw() +
   ylab('Vertical Jump Height (m)')+
   xlab('Group') + theme_prism()
+ggsave("Vertical_jump_height_bygroup.png")
 
+
+library(table1)
+
+table1(~jump_height | events*sex, overall=FALSE,
+        data=Df)
 
 ################## Function needed for tables in APA format###################
 apa_theme <- function (ft)  {
