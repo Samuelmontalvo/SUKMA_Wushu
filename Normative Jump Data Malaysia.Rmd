@@ -1,0 +1,2742 @@
+---
+title: "Normative Jump Data Malaysia"
+author: "Samuel Montalvo, Ph.D."
+date: "11/20/2022"
+output: html_document
+---
+
+```{r setup, message=FALSE, warning= FALSE}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(PupillometryR)
+library(ggprism)
+library(flextable)
+library(officer)
+library(table1)
+library(janitor) 
+library(caret)
+library(ggpubr)
+library(plotly)
+library(kableExtra)
+library(htmlwidgets)
+library(webshot)
+library(ggcorrplot)
+library(factoextra)
+```
+
+```{r}
+Df <- read_csv("Project-Session-09_13_22-Session-09_13_22-AveragesAndTests_Countermovement_Jump.csv")
+
+## Reduce jump trials to average
+Df_average <- Df %>% filter(TestId == "AVERAGE")
+Df_average <- clean_names(Df_average)
+Df_average <- subset(Df_average, select = -c(test_id, date, time, segment, position, excluded, type, tags, rsi, flight_time,takeoff_velocity))
+Df_average$'l_r_landing_impulse_index'<- as.numeric(Df_average$'l_r_landing_impulse_index')
+Df_average$'time_to_stabilization'<- as.numeric(Df_average$'time_to_stabilization')
+```
+
+
+
+## Data Wrangling and Cleaning
+
+Names of participants and sex needs to be join into the main jump dataset to have a complete dataset. New dataset is then saved into an csv document
+
+```{r, error=FALSE,message=FALSE, warning = FALSE}
+## import participant details
+library(readxl)
+Df_details <- read_excel("Athletes details SUKMA XX.xlsx")
+
+# change capital name letters so that data sets match
+Df_details <- Df_details %>% rename(name = NAME)
+
+# re name males and females
+Df_details$Sex <- recode_factor(Df_details$Sex,  F = "Female",
+                                M = "Male")
+# merge data sets by Name
+Df <- inner_join(x=Df_details,y=Df_average,
+                 by = "name")
+
+## Subset NA
+Df <- Df |>
+  subset(!is.na(jump_height))
+
+# convert spaces to _
+Df <- clean_names(Df)
+
+#remove names
+#Df <- subset(Df, select = -c(name))
+
+Df <- Df %>% rename(ID = number)
+
+write.csv(Df, "C:\\Users\\Samuel\\OneDrive\\Documents\\R\\SUKMA_Wushu\\SUKMA_Wushu_Data.csv", row.names = FALSE)
+
+```
+
+# Relative foce
+```{r}
+Df <- Df %>% mutate(peak_relative_propulsive_force = peak_propulsive_force / system_weight)
+Df <- Df %>% mutate(peak_relative_landing_force = peak_landing_force / system_weight)
+Df <- Df %>% mutate(peak_relative_propulsive_power = peak_braking_force / system_weight)
+```
+
+
+```{r}
+generate_normative_tables <- function(data, variable_name, display_name, selected_sex) {
+  # Filter data by sex
+  df_sex <- data %>% filter(sex == selected_sex)
+  
+  # Calculate z-scores
+  df_sex <- df_sex %>% 
+    mutate(zscore = (!!sym(variable_name) - mean(!!sym(variable_name), na.rm = TRUE)) / 
+                     sd(!!sym(variable_name), na.rm = TRUE))
+  
+  # Calculate T-scores
+  df_sex <- df_sex %>% mutate(Tscore = zscore * 10 + 50)
+  
+  # Create descriptive categories
+  df_sex <- df_sex %>% mutate(Description = 
+    case_when(
+      Tscore > 80 ~ 'Excellent',
+      Tscore <= 80 & Tscore > 70 ~ 'Very Good',
+      Tscore <= 70 & Tscore > 60 ~ 'Good',
+      Tscore <= 60 & Tscore > 50 ~ 'Above Average',
+      Tscore <= 50 & Tscore > 45 ~ 'Average',
+      Tscore <= 45 & Tscore > 40 ~ 'Below Average',
+      Tscore <= 40 & Tscore > 30 ~ 'Poor',
+      Tscore <= 30 & Tscore > 20 ~ 'Very Poor',
+      Tscore <= 20 ~ 'Extremely Poor'
+    )
+  )
+  
+  # Order factor levels
+  df_sex$Description <- factor(df_sex$Description,
+                              levels = c("Excellent", "Very Good", "Good", 
+                                         "Above Average", "Average",
+                                         "Below Average", "Poor", 
+                                         "Very Poor", "Extremely Poor"),
+                              ordered = TRUE)
+  
+  # Create plot
+  p <- df_sex %>%
+    ggplot(aes(y = !!sym(variable_name), x = Tscore, fill = Description)) +
+    geom_point(position = position_jitter(width = .25), size = 4, shape = 21, color = "black") +
+    scale_fill_manual(values = c("#006600", "#33CC33", "#00CC00",
+                                "#ccffcc", "#FFFFFF", "#FFCC00",
+                                "#CC3232", "#a32828", "#7a1e1e")) +
+    theme_bw() +
+    labs(title = ifelse(selected_sex == "Male", "Male", "Female"), y = display_name)
+  
+  # Create summary table
+  summary_table <- df_sex %>%
+    group_by(Description) %>%
+    summarise(
+      `Number of Athletes` = n(),
+      `Min Value` = format(min(!!sym(variable_name), na.rm = TRUE), digits = 2),
+      `Max Value` = format(max(!!sym(variable_name), na.rm = TRUE), digits = 2)
+    )
+  
+  # Calculate category ranges - this is the function we need to integrate
+  # This is a helper function inside our main function
+  calculate_ranges <- function(summary_df) {
+    # Order by Description to ensure correct sequence
+    summary_df$Description <- factor(summary_df$Description,
+                                   levels = c("Excellent", "Very Good", "Good", 
+                                            "Above Average", "Average",
+                                            "Below Average", "Poor", 
+                                            "Very Poor", "Extremely Poor"),
+                                   ordered = TRUE)
+    
+    summary_df <- summary_df %>% arrange(Description)
+    
+    # Create empty vector for ranges
+    ranges <- character(nrow(summary_df))
+    
+    # Get category names
+    categories <- levels(summary_df$Description)
+    
+    # Loop through each row and create the appropriate range description
+    for (i in 1:nrow(summary_df)) {
+      current_cat <- summary_df$Description[i]
+      
+      # Find positions in the ordered factor levels
+      current_pos <- which(categories == current_cat)
+      
+      if (current_cat == "Excellent") {
+        # For Excellent: "> min_value"
+        ranges[i] <- paste("> ", summary_df$`Min Value`[i])
+      } else if (current_cat == "Extremely Poor") {
+        # For Extremely Poor: "< min_value of Very Poor"
+        very_poor_idx <- which(summary_df$Description == "Very Poor")
+        if (length(very_poor_idx) > 0) {
+          ranges[i] <- paste("< ", summary_df$`Min Value`[very_poor_idx])
+        } else {
+          ranges[i] <- paste("< ", summary_df$`Min Value`[i])
+        }
+      } else {
+        # For all other categories: between current min and next category up min
+        next_higher_cat <- categories[current_pos - 1] # Since Excellent is first
+        next_higher_idx <- which(summary_df$Description == next_higher_cat)
+        
+        if (length(next_higher_idx) > 0) {
+          ranges[i] <- paste(summary_df$`Min Value`[i], " - ", 
+                             summary_df$`Min Value`[next_higher_idx])
+        } else {
+          # Fallback if we can't find the next category
+          ranges[i] <- paste(summary_df$`Min Value`[i], " - ", 
+                             summary_df$`Max Value`[i])
+        }
+      }
+    }
+    
+    # Add ranges to the table
+    summary_df$`Value Range` <- ranges
+    return(summary_df)
+  }
+  
+  # Apply the helper function to calculate ranges
+  summary_table_with_ranges <- calculate_ranges(summary_table)
+  
+  # Format table
+  formatted_table <- summary_table_with_ranges %>%
+    select(-`Min Value`, -`Max Value`) %>%
+    kable("html", align = "c") %>%
+    column_spec(1:3, bold = TRUE) %>%
+    kable_styling(full_width = TRUE)
+  
+  # Add row colors
+  for (desc in levels(summary_table_with_ranges$Description)) {
+    row_idx <- which(summary_table_with_ranges$Description == desc)
+    if (length(row_idx) > 0) {
+      color <- switch(as.character(desc),
+                     "Excellent" = "#00AA00",
+                     "Very Good" = "#00CC00",
+                     "Good" = "#00EE00",
+                     "Above Average" = "#99FF99",
+                     "Average" = "#FFFFFF",
+                     "Below Average" = "#FFF000",
+                     "Poor" = "#FF0000",
+                     "Very Poor" = "#CC0000",
+                     "Extremely Poor" = "#990000",
+                     "#FFFFFF")  # Default
+      
+      formatted_table <- formatted_table %>%
+        row_spec(row_idx, background = color)
+    }
+  }
+  
+  # Return both plot and table in a list
+  return(list(
+    data = df_sex,
+    plot = p,
+    table = formatted_table,
+    summary = summary_table_with_ranges
+  ))
+}
+```
+
+results
+```{r}
+# First, make sure you've defined the function as provided in the previous message
+
+# Generate tables for Jump Height
+male_jump_results <- generate_normative_tables(Df, "jump_height", "Jump Height (m)", "Male")
+female_jump_results <- generate_normative_tables(Df, "jump_height", "Jump Height (m)", "Female")
+
+# Generate tables for mRSI
+male_mrsi_results <- generate_normative_tables(Df, "m_rsi", "mRSI", "Male")
+female_mrsi_results <- generate_normative_tables(Df, "m_rsi", "mRSI", "Female")
+
+# Generate tables for Relative Propulsive Net Impulse
+male_rpni_results <- generate_normative_tables(Df, "relative_propulsive_net_impulse", "Relative Propulsive Net Impulse (Ns/kg)", "Male")
+female_rpni_results <- generate_normative_tables(Df, "relative_propulsive_net_impulse", "Relative Propulsive Net Impulse (Ns/kg)", "Female")
+
+# Generate tables for Relative Peak Braking Force
+male_rpbf_results <- generate_normative_tables(Df, "peak_relative_propulsive_power", "Relative Peak Propulsive Power (W/kg)", "Male")
+female_rpbf_results <- generate_normative_tables(Df, "peak_relative_propulsive_power", "Relative Peak Propulsive Power (W/kg)", "Female")
+
+# Generate tables for Relative Peak Propulsive Force
+male_rppf_results <- generate_normative_tables(Df, "peak_relative_propulsive_force", "Relative Peak Propulsive Force (N/kg)", "Male")
+female_rppf_results <- generate_normative_tables(Df, "peak_relative_propulsive_force", "Relative Peak Propulsive Force (N/kg)", "Female")
+```
+
+individual plots
+```{r}
+# Jump Height plots
+ggplotly(male_jump_results$plot)
+ggplotly(female_jump_results$plot)
+
+# mRSI plots
+ggplotly(male_mrsi_results$plot)
+ggplotly(female_mrsi_results$plot)
+
+# Relative Propulsive Net Impulse plots
+ggplotly(male_rpni_results$plot)
+ggplotly(female_rpni_results$plot)
+
+# Relative Peak Braking Force plots
+ggplotly(male_rpbf_results$plot)
+ggplotly(female_rpbf_results$plot)
+
+# Relative Peak Propulsive Force plots
+ggplotly(male_rppf_results$plot)
+ggplotly(female_rppf_results$plot)
+```
+
+individual tables
+```{r}
+# Jump Height tables
+male_jump_results$table
+female_jump_results$table
+
+# mRSI tables
+male_mrsi_results$table
+female_mrsi_results$table
+
+# Relative Propulsive Net Impulse tables
+male_rpni_results$table
+female_rpni_results$table
+
+# Relative Peak Braking Force tables
+male_rpbf_results$table
+female_rpbf_results$table
+
+# Relative Peak Propulsive Force tables
+male_rppf_results$table
+female_rppf_results$table
+```
+
+
+
+single table
+```{r}
+create_consolidated_table <- function(sex) {
+  if(sex == "Male") {
+    # Get summaries for male athletes
+    jump_summary <- male_jump_results$summary
+    mrsi_summary <- male_mrsi_results$summary
+    rpni_summary <- male_rpni_results$summary
+    rpbf_summary <- male_rpbf_results$summary
+    rppf_summary <- male_rppf_results$summary
+  } else {
+    # Get summaries for female athletes
+    jump_summary <- female_jump_results$summary
+    mrsi_summary <- female_mrsi_results$summary
+    rpni_summary <- female_rpni_results$summary
+    rpbf_summary <- female_rpbf_results$summary
+    rppf_summary <- female_rppf_results$summary
+  }
+  
+  # Keep only Description and Value Range columns
+  jump_summary <- jump_summary %>% 
+    select(Description, `Value Range`) %>% 
+    rename(`Jump Height (m)` = `Value Range`)
+  
+  mrsi_summary <- mrsi_summary %>% 
+    select(Description, `Value Range`) %>% 
+    rename(`mRSI` = `Value Range`)
+  
+  rpni_summary <- rpni_summary %>% 
+    select(Description, `Value Range`) %>% 
+    rename(`Rel. Net Impulse (Ns/kg)` = `Value Range`)
+  
+  rpbf_summary <- rpbf_summary %>% 
+    select(Description, `Value Range`) %>% 
+    rename(`Rel. Peak Propulsive Power (W/kg)` = `Value Range`)
+  
+  rppf_summary <- rppf_summary %>% 
+    select(Description, `Value Range`) %>% 
+    rename(`Rel. Peak Propulsive Force (N/kg)` = `Value Range`)
+  
+  # Join all tables by Description
+  consolidated <- jump_summary %>%
+    full_join(mrsi_summary, by = "Description") %>%
+    full_join(rpni_summary, by = "Description") %>%
+    full_join(rpbf_summary, by = "Description") %>%
+    full_join(rppf_summary, by = "Description")
+  
+  # Define all performance categories
+  all_categories <- c("Excellent", "Very Good", "Good", "Above Average", "Average",
+                    "Below Average", "Poor", "Very Poor", "Extremely Poor")
+  
+  # Add any missing categories as empty rows
+  missing <- all_categories[!all_categories %in% consolidated$Description]
+  
+  if(length(missing) > 0) {
+    missing_df <- data.frame(Description = missing)
+    consolidated <- bind_rows(consolidated, missing_df)
+  }
+  
+  # Make sure categories are properly ordered
+  consolidated$Description <- factor(consolidated$Description,
+                                    levels = all_categories,
+                                    ordered = TRUE)
+  
+  consolidated <- consolidated %>% arrange(Description)
+  
+  # Handle missing values for Excellent and Extremely Poor
+  # If Excellent is NA, use value greater than Very Good
+  if(is.na(consolidated$`Jump Height (m)`[consolidated$Description == "Excellent"])) {
+    vg_value <- consolidated$`Jump Height (m)`[consolidated$Description == "Very Good"]
+    if(!is.na(vg_value) && grepl(" - ", vg_value)) {
+      # Extract the second value from the range
+      vg_max <- as.numeric(trimws(strsplit(vg_value, " - ")[[1]][2]))
+      consolidated$`Jump Height (m)`[consolidated$Description == "Excellent"] <- paste(">", vg_max)
+    }
+  }
+  
+  # Do similar for other variables and Excellent category
+  if(is.na(consolidated$`mRSI`[consolidated$Description == "Excellent"])) {
+    vg_value <- consolidated$`mRSI`[consolidated$Description == "Very Good"]
+    if(!is.na(vg_value) && grepl(" - ", vg_value)) {
+      vg_max <- as.numeric(trimws(strsplit(vg_value, " - ")[[1]][2]))
+      consolidated$`mRSI`[consolidated$Description == "Excellent"] <- paste(">", vg_max)
+    }
+  }
+  
+  if(is.na(consolidated$`Rel. Net Impulse (Ns/kg)`[consolidated$Description == "Excellent"])) {
+    vg_value <- consolidated$`Rel. Net Impulse (Ns/kg)`[consolidated$Description == "Very Good"]
+    if(!is.na(vg_value) && grepl(" - ", vg_value)) {
+      vg_max <- as.numeric(trimws(strsplit(vg_value, " - ")[[1]][2]))
+      consolidated$`Rel. Net Impulse (Ns/kg)`[consolidated$Description == "Excellent"] <- paste(">", vg_max)
+    }
+  }
+  
+  if(is.na(consolidated$`Rel. Peak Propulsive Power (W/kg)`[consolidated$Description == "Excellent"])) {
+    vg_value <- consolidated$`Rel. Peak Propulsive Power (W/kg)`[consolidated$Description == "Very Good"]
+    if(!is.na(vg_value) && grepl(" - ", vg_value)) {
+      vg_max <- as.numeric(trimws(strsplit(vg_value, " - ")[[1]][2]))
+      consolidated$`Rel. Peak Propulsive Power (W/kg)`[consolidated$Description == "Excellent"] <- paste(">", vg_max)
+    }
+  }
+  
+  if(is.na(consolidated$`Rel. Peak Propulsive Force (N/kg)`[consolidated$Description == "Excellent"])) {
+    vg_value <- consolidated$`Rel. Peak Propulsive Force (N/kg)`[consolidated$Description == "Very Good"]
+    if(!is.na(vg_value) && grepl(" - ", vg_value)) {
+      vg_max <- as.numeric(trimws(strsplit(vg_value, " - ")[[1]][2]))
+      consolidated$`Rel. Peak Propulsive Force (N/kg)`[consolidated$Description == "Excellent"] <- paste(">", vg_max)
+    }
+  }
+  
+  # Handle Extremely Poor: use value less than Very Poor
+  if(is.na(consolidated$`Jump Height (m)`[consolidated$Description == "Extremely Poor"])) {
+    vp_value <- consolidated$`Jump Height (m)`[consolidated$Description == "Very Poor"]
+    if(!is.na(vp_value) && grepl(" - ", vp_value)) {
+      vp_min <- as.numeric(trimws(strsplit(vp_value, " - ")[[1]][1]))
+      consolidated$`Jump Height (m)`[consolidated$Description == "Extremely Poor"] <- paste("<", vp_min)
+    }
+  }
+  
+  # Do similar for other variables and Extremely Poor category
+  if(is.na(consolidated$`mRSI`[consolidated$Description == "Extremely Poor"])) {
+    vp_value <- consolidated$`mRSI`[consolidated$Description == "Very Poor"]
+    if(!is.na(vp_value) && grepl(" - ", vp_value)) {
+      vp_min <- as.numeric(trimws(strsplit(vp_value, " - ")[[1]][1]))
+      consolidated$`mRSI`[consolidated$Description == "Extremely Poor"] <- paste("<", vp_min)
+    }
+  }
+  
+  if(is.na(consolidated$`Rel. Net Impulse (Ns/kg)`[consolidated$Description == "Extremely Poor"])) {
+    vp_value <- consolidated$`Rel. Net Impulse (Ns/kg)`[consolidated$Description == "Very Poor"]
+    if(!is.na(vp_value) && grepl(" - ", vp_value)) {
+      vp_min <- as.numeric(trimws(strsplit(vp_value, " - ")[[1]][1]))
+      consolidated$`Rel. Net Impulse (Ns/kg)`[consolidated$Description == "Extremely Poor"] <- paste("<", vp_min)
+    }
+  }
+  
+  if(is.na(consolidated$`Rel. Peak Propulsive Power (W/kg)`[consolidated$Description == "Extremely Poor"])) {
+    vp_value <- consolidated$`Rel. Peak Propulsive Power (W/kg)`[consolidated$Description == "Very Poor"]
+    if(!is.na(vp_value)) {
+      # For cases where the value might be a single number, not a range
+      if(grepl(" - ", vp_value)) {
+        vp_min <- as.numeric(trimws(strsplit(vp_value, " - ")[[1]][1]))
+      } else {
+        vp_min <- as.numeric(gsub("[^0-9.]", "", vp_value))
+      }
+      consolidated$`Rel. Peak Propulsive Power (W/kg)`[consolidated$Description == "Extremely Poor"] <- paste("<", vp_min)
+    } else {
+      # If Very Poor is also NA, look at Poor
+      poor_value <- consolidated$`Rel. Peak Propulsive Power (W/kg)`[consolidated$Description == "Poor"]
+      if(!is.na(poor_value) && grepl(" - ", poor_value)) {
+        poor_min <- as.numeric(trimws(strsplit(poor_value, " - ")[[1]][1]))
+        consolidated$`Rel. Peak Propulsive Power (W/kg)`[consolidated$Description == "Very Poor"] <- paste("<", poor_min)
+        consolidated$`Rel. Peak Propulsive Power (W/kg)`[consolidated$Description == "Extremely Poor"] <- paste("<<", poor_min)
+      }
+    }
+  }
+  
+  if(is.na(consolidated$`Rel. Peak Propulsive Force (N/kg)`[consolidated$Description == "Extremely Poor"])) {
+    vp_value <- consolidated$`Rel. Peak Propulsive Force (N/kg)`[consolidated$Description == "Very Poor"]
+    if(!is.na(vp_value)) {
+      if(grepl(" - ", vp_value)) {
+        vp_min <- as.numeric(trimws(strsplit(vp_value, " - ")[[1]][1]))
+      } else {
+        vp_min <- as.numeric(gsub("[^0-9.]", "", vp_value))
+      }
+      consolidated$`Rel. Peak Propulsive Force (N/kg)`[consolidated$Description == "Extremely Poor"] <- paste("<", vp_min)
+    } else {
+      poor_value <- consolidated$`Rel. Peak Propulsive Force (N/kg)`[consolidated$Description == "Poor"]
+      if(!is.na(poor_value) && grepl(" - ", poor_value)) {
+        poor_min <- as.numeric(trimws(strsplit(poor_value, " - ")[[1]][1]))
+        consolidated$`Rel. Peak Propulsive Force (N/kg)`[consolidated$Description == "Very Poor"] <- paste("<", poor_min)
+        consolidated$`Rel. Peak Propulsive Force (N/kg)`[consolidated$Description == "Extremely Poor"] <- paste("<<", poor_min)
+      }
+    }
+  }
+  
+  # Format the final table
+  formatted_table <- consolidated %>%
+    kable("html", align = "c") %>%
+    column_spec(1:6, bold = TRUE) %>%
+    kable_styling(full_width = TRUE)
+  
+  # Add row colors
+  for (i in 1:nrow(consolidated)) {
+    desc <- consolidated$Description[i]
+    color <- switch(as.character(desc),
+                   "Excellent" = "#00AA00",
+                   "Very Good" = "#00CC00",
+                   "Good" = "#00EE00",
+                   "Above Average" = "#99FF99",
+                   "Average" = "#FFFFFF",
+                   "Below Average" = "#FFF000",
+                   "Poor" = "#FF0000",
+                   "Very Poor" = "#CC0000",
+                   "Extremely Poor" = "#990000",
+                   "#FFFFFF")  # Default
+    
+    formatted_table <- formatted_table %>%
+      row_spec(i, background = color)
+  }
+  
+  return(list(table = formatted_table, data = consolidated))
+}
+```
+
+
+```{r}
+# Create consolidated tables
+male_result <- create_consolidated_table("Male")
+female_result <- create_consolidated_table("Female")
+
+# Display the tables
+male_result$table
+female_result$table
+
+# Save the tables as images
+html_file_m_consolidated <- "table_male_consolidated.html"
+writeLines(as.character(male_result$table), html_file_m_consolidated)
+webshot(html_file_m_consolidated, "table_male_consolidated.png", vwidth = 800, vheight = 400)
+unlink(html_file_m_consolidated)
+
+html_file_f_consolidated <- "table_female_consolidated.html"
+writeLines(as.character(female_result$table), html_file_f_consolidated)
+webshot(html_file_f_consolidated, "table_female_consolidated.png", vwidth = 800, vheight = 400)
+unlink(html_file_f_consolidated)
+```
+
+
+```{r}
+library(ggplot2)
+library(patchwork)
+library(dplyr)
+library(cowplot)
+
+create_single_column_plot <- function(data, sex) {
+  # Filter by sex
+  df_sex <- data %>% filter(sex == sex)
+  
+  # Calculate T-scores for each variable
+  df_sex <- df_sex %>%
+    # Jump Height
+    mutate(
+      jh_zscore = (jump_height - mean(jump_height, na.rm = TRUE)) / sd(jump_height, na.rm = TRUE),
+      jh_tscore = jh_zscore * 10 + 50,
+      
+      # mRSI
+      mrsi_zscore = (m_rsi - mean(m_rsi, na.rm = TRUE)) / sd(m_rsi, na.rm = TRUE),
+      mrsi_tscore = mrsi_zscore * 10 + 50,
+      
+      # Relative Net Impulse
+      rni_zscore = (relative_propulsive_net_impulse - mean(relative_propulsive_net_impulse, na.rm = TRUE)) / 
+                   sd(relative_propulsive_net_impulse, na.rm = TRUE),
+      rni_tscore = rni_zscore * 10 + 50,
+      
+      # Relative Peak Braking Force
+      rpbf_zscore = (peak_relative_propulsive_power - mean(peak_relative_propulsive_power, na.rm = TRUE)) / 
+                    sd(peak_relative_propulsive_power, na.rm = TRUE),
+      rpbf_tscore = rpbf_zscore * 10 + 50,
+      
+      # Relative Peak Propulsive Force
+      rppf_zscore = (peak_relative_propulsive_force - mean(peak_relative_propulsive_force, na.rm = TRUE)) / 
+                    sd(peak_relative_propulsive_force, na.rm = TRUE),
+      rppf_tscore = rppf_zscore * 10 + 50
+    )
+  
+  # Define category levels and colors
+  category_levels <- c("Excellent", "Very Good", "Good", "Above Average", "Average",
+                      "Below Average", "Poor", "Very Poor", "Extremely Poor")
+  
+  performance_colors <- c(
+    "Excellent" = "#006600", 
+    "Very Good" = "#33CC33", 
+    "Good" = "#00CC00",
+    "Above Average" = "#ccffcc", 
+    "Average" = "#FFFFFF", 
+    "Below Average" = "#FFCC00",
+    "Poor" = "#CC3232", 
+    "Very Poor" = "#a32828", 
+    "Extremely Poor" = "#7a1e1e"
+  )
+  
+  # Theme with no legend
+  no_legend_theme <- theme_bw() +
+    theme(
+      panel.grid.minor = element_blank(),
+      legend.position = "none",
+      plot.title = element_text(size = 10, face = "bold", hjust = 0),
+      axis.title = element_text(size = 9),
+      axis.text = element_text(size = 8),
+      plot.margin = margin(5, 5, 0, 5)
+    )
+  
+  # Function to add performance categories to a dataset
+  add_categories <- function(df, tscore_col) {
+    tscore_values <- df[[tscore_col]]
+    
+    df$Description <- factor(
+      case_when(
+        tscore_values > 80 ~ 'Excellent',
+        tscore_values <= 80 & tscore_values > 70 ~ 'Very Good',
+        tscore_values <= 70 & tscore_values > 60 ~ 'Good',
+        tscore_values <= 60 & tscore_values > 50 ~ 'Above Average',
+        tscore_values <= 50 & tscore_values > 45 ~ 'Average',
+        tscore_values <= 45 & tscore_values > 40 ~ 'Below Average',
+        tscore_values <= 40 & tscore_values > 30 ~ 'Poor',
+        tscore_values <= 30 & tscore_values > 20 ~ 'Very Poor',
+        tscore_values <= 20 ~ 'Extremely Poor'
+      ),
+      levels = category_levels,
+      ordered = TRUE
+    )
+    
+    return(df)
+  }
+  
+  # Create datasets for each plot with appropriate categories
+  df_jh <- add_categories(df_sex, "jh_tscore")
+  df_mrsi <- add_categories(df_sex, "mrsi_tscore")
+  df_rni <- add_categories(df_sex, "rni_tscore")
+  df_rpbf <- add_categories(df_sex, "rpbf_tscore")
+  df_rppf <- add_categories(df_sex, "rppf_tscore")
+  
+  # Create individual plots
+  p1 <- ggplot(df_jh, aes(x = jh_tscore, y = jump_height, fill = Description)) +
+    geom_point(position = position_jitter(width = 0.25), size = 4, shape = 21, color = "black") +
+    scale_fill_manual(values = performance_colors, breaks = category_levels, drop = FALSE) +
+    no_legend_theme +
+    labs(title = "Jump Height (m)", x = "", y = "(m)")
+  
+  p2 <- ggplot(df_mrsi, aes(x = mrsi_tscore, y = m_rsi, fill = Description)) +
+    geom_point(position = position_jitter(width = 0.25), size = 4, shape = 21, color = "black") +
+    scale_fill_manual(values = performance_colors, breaks = category_levels, drop = FALSE) +
+    no_legend_theme +
+    labs(title = "mRSI", x = "", y = "Index")
+  
+  p3 <- ggplot(df_rni, aes(x = rni_tscore, y = relative_propulsive_net_impulse, fill = Description)) +
+    geom_point(position = position_jitter(width = 0.25), size = 4, shape = 21, color = "black") +
+    scale_fill_manual(values = performance_colors, breaks = category_levels, drop = FALSE) +
+    no_legend_theme +
+    labs(title = "Rel. Net Impulse (Ns/kg)", x = "", y = "(Ns/kg)")
+  
+  p4 <- ggplot(df_rpbf, aes(x = rpbf_tscore, y = peak_relative_propulsive_power, fill = Description)) +
+    geom_point(position = position_jitter(width = 0.25), size = 4, shape = 21, color = "black") +
+    scale_fill_manual(values = performance_colors, breaks = category_levels, drop = FALSE) +
+    no_legend_theme +
+    labs(title = "Rel. Peak Propulsive Power (W/kg)", x = "", y = "(N/kg)")
+  
+  p5 <- ggplot(df_rppf, aes(x = rppf_tscore, y = peak_relative_propulsive_force, fill = Description)) +
+    geom_point(position = position_jitter(width = 0.25), size = 4, shape = 21, color = "black") +
+    scale_fill_manual(values = performance_colors, breaks = category_levels, drop = FALSE) +
+    no_legend_theme +
+    labs(title = "Rel. Peak Propulsive Force (N/kg)", x = "Tscore", y = "(N/kg)")
+  
+  # Create a separate data frame with all possible categories for the legend
+  legend_df <- data.frame(Description = factor(category_levels, levels = category_levels))
+  
+  # Create a combined plot with a shared legend
+  legend_plot <- ggplot(legend_df, aes(x = 1, y = 1, fill = Description)) +
+    geom_tile() +
+    scale_fill_manual(values = performance_colors, breaks = category_levels, drop = FALSE) +
+    theme_void() +
+    theme(
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold"),
+      legend.direction = "horizontal"
+    ) +
+    guides(fill = guide_legend(
+      title = "Description",
+      nrow = 1,
+      byrow = TRUE
+    ))
+  
+  # Extract the legend
+  legend <- get_legend(legend_plot)
+  
+  # Stack the plots vertically without a legend
+  stacked_plots <- p1 / p2 / p3 / p4 / p5
+  
+  # Combine plots with the legend at the bottom
+  combined_plot <- stacked_plots + 
+    plot_annotation(
+      title = paste(sex, "Athletes"),
+      theme = theme(
+        plot.title = element_text(size = 14, face = "bold", hjust = 0.5)
+      )
+    )
+  
+  # Add the legend
+  final_plot <- plot_grid(
+    combined_plot, 
+    legend, 
+    ncol = 1, 
+    rel_heights = c(5, 0.3)
+  )
+  
+  return(final_plot)
+}
+
+# Create the plots for each sex
+male_plot <- create_single_column_plot(Df, "Male")
+female_plot <- create_single_column_plot(Df, "Female")
+
+# Save the plots
+ggsave("male_single_column.png", male_plot, width = 8, height = 12)
+ggsave("female_single_column.png", female_plot, width = 8, height = 12)
+
+# Side by side plots for both sexes
+combined_sexes <- plot_grid(
+  male_plot, 
+  female_plot, 
+  ncol = 2, 
+  rel_widths = c(1, 1)
+)
+
+ggsave("combined_sexes_single_column.png", combined_sexes, width = 16, height = 12)
+```
+
+
+
+
+
+## Zscore
+
+Creation and distribuition of the zscore. First need to create two data frames, one for males and one for females.
+
+```{r, echo=FALSE}
+Df_sex <- Df %>% select(name,ID,sex,jump_height)
+
+#zscore male
+Df_male <- Df_sex %>% filter(sex=="Male")
+
+Df_male <- Df_male %>% 
+  mutate(zscore = (jump_height - mean(jump_height))/sd(jump_height))
+
+t_male_plot<- Df_male %>% ggplot(aes(zscore)) + geom_density() + theme_prism()+
+  labs(title="Males")
+
+# Tscore female
+Df_female <- Df_sex %>% filter(sex=="Female")
+
+Df_female <- Df_female %>% 
+  mutate(zscore = (jump_height - mean(jump_height))/sd(jump_height))
+
+t_female_plot <- Df_female %>% ggplot(aes(zscore)) + geom_density() + theme_prism() + labs(title="Females")
+
+
+#plot together
+ggarrange(t_male_plot,t_female_plot, ncol = 1)
+```
+
+## Tscore for CMJ
+
+next step is to create a tscore based on the zscore * 10 + 50 as recommended by the article. Then, a rank class is created based on the tscore. Lastly, factors are reorderd so that they appear in that order in the plots.
+
+```{r}
+# rank based on z score
+Df_male <- Df_male%>% mutate(Tscore =  (zscore*10)+50)
+Df_female <- Df_female%>% mutate(Tscore =  (zscore*10)+50)
+
+
+Df_male <- Df_male %>% mutate(Description = 
+                            case_when(Tscore > 80 ~ 'Excellent',
+                                    Tscore <= 80 & Tscore > 70  ~ 'Very Good',
+                                    Tscore <= 70 & Tscore > 60  ~ 'Good',
+                                    Tscore <= 60 & Tscore > 50  ~ 'Above Average',
+                                    Tscore <= 50 & Tscore > 45  ~ 'Average',
+                                    Tscore <= 45 & Tscore > 40  ~ 'Below Average',
+                                    Tscore <= 40 & Tscore > 30  ~ 'Poor',
+                                    Tscore <= 30 & Tscore > 20  ~ 'Very Poor',
+                                    Tscore <= 20  ~ 'Extremely Poor')) 
+
+Df_male$Description <- factor(Df_male$Description,
+                             levels = c("Excellent", "Very Good", "Good", 
+                                        "Above Average", "Average",
+                                        "Below Average","Poor", 
+                                        "Very Poor", "Extremely Poor"),
+                             ordered = TRUE)
+
+
+Df_female <- Df_female %>%mutate(Description = 
+                            case_when(Tscore > 80 ~ 'Excellent',
+                                    Tscore <= 80 & Tscore > 70  ~ 'Very Good',
+                                    Tscore <= 70 & Tscore > 60  ~ 'Good',
+                                    Tscore <= 60 & Tscore > 50  ~ 'Above Average',
+                                    Tscore <= 50 & Tscore > 45  ~ 'Average',
+                                    Tscore <= 45 & Tscore > 40  ~ 'Below Average',
+                                    Tscore <= 40 & Tscore > 30  ~ 'Poor',
+                                    Tscore <= 30 & Tscore > 20  ~ 'Very Poor',
+                                    Tscore <= 20  ~ 'Extremely Poor')) 
+
+Df_female$Description <- factor(Df_female$Description,
+                             levels = c("Excellent", "Very Good", "Good", 
+                                        "Above Average", "Average",
+                                        "Below Average","Poor", 
+                                        "Very Poor", "Extremely Poor"),
+                             ordered = TRUE)
+```
+
+## Male CMJ Plot
+
+```{r fig.cap= "Figure 1. Interactive plot of normative jump data for male athletes.",message = FALSE, warning = FALSE,fig.width = 10, fig.height = 7}
+p1 <- Df_male %>%
+  ggplot(aes(y = jump_height, x = Tscore, fill = Description, group=name)) +
+  geom_point(position = position_jitter(width = .25), size = 4, shape = 21, color = "black") +
+  scale_fill_manual(values = c("#006600", "#33CC33", "#00CC00",
+                               "#ccffcc", "#FFFFFF", "#FFCC00",
+                               "#CC3232", "#a32828", "#7a1e1e")) +
+  theme_bw() +
+  labs(title = "Male", y = "Jump Height (m)") +
+  scale_x_continuous(breaks = seq(0, max(Df_male$Tscore), by = 10))
+
+ggplotly(p1)
+#ggsave("p1.png")
+```
+
+### Male CMJ Table
+
+```{r}
+#Replace 'Min Jump Height' and "max Jump Height' for variable of interest
+summary_male_table <- Df_male %>%
+  group_by(Description) %>%
+  summarise(
+    `Number of Athletes` = n(),
+    `Min Jump Height (m)` = format(min(jump_height), digits = 2),
+    `Max Jump Height (m)` = format(max(jump_height), digits = 2))
+
+summary_male_table$`Jump Height (m) Range` <- ifelse(
+  summary_male_table$Description == "Excellent",
+  paste("> ", summary_male_table$`Min Jump Height (m)`[summary_male_table$Description == "Excellent"]),
+  ifelse(
+    summary_male_table$Description == "Very Good",
+    paste(summary_male_table$`Min Jump Height (m)`[summary_male_table$Description == "Very Good"],
+          " - ",
+          summary_male_table$`Min Jump Height (m)`[summary_male_table$Description == "Excellent"]
+    ),
+    ifelse(
+      summary_male_table$Description == "Good",
+      paste(summary_male_table$`Min Jump Height (m)`[summary_male_table$Description == "Good"], 
+            " - ", 
+            summary_male_table$`Min Jump Height (m)`[summary_male_table$Description == "Very Good"]),
+      ifelse(
+        summary_male_table$Description == "Above Average",
+        paste(summary_male_table$`Max Jump Height (m)`[summary_male_table$Description == "Average"], 
+              " - ", 
+              summary_male_table$`Min Jump Height (m)`[summary_male_table$Description == "Good"]),
+        ifelse(
+          summary_male_table$Description == "Average",
+          paste(summary_male_table$`Min Jump Height (m)`[summary_male_table$Description == "Average"], 
+                " - ", 
+                summary_male_table$`Min Jump Height (m)`[summary_male_table$Description == "Above Average"]),
+          ifelse(
+            summary_male_table$Description == "Below Average",
+            paste(summary_male_table$`Min Jump Height (m)`[summary_male_table$Description == "Below Average"], 
+                  " - ", 
+                  summary_male_table$`Min Jump Height (m)`[summary_male_table$Description == "Average"]),
+            ifelse(
+              summary_male_table$Description == "Poor",
+              paste(summary_male_table$`Min Jump Height (m)`[summary_male_table$Description == "Poor"], 
+                    " - ", 
+                    summary_male_table$`Min Jump Height (m)`[summary_male_table$Description == "Below Average"]),
+              ifelse(
+                summary_male_table$Description == "Very Poor",
+                paste(summary_male_table$`Min Jump Height (m)`[summary_male_table$Description == "Very Poor"], 
+                      " - ", 
+                      summary_male_table$`Min Jump Height (m)`[summary_male_table$Description == "Poor"]),
+                ifelse(
+                  summary_male_table$Description == "Extremely Poor",
+                  paste("< ", summary_male_table$`Min Jump Height (cm)`[summary_male_table$Description == "Very Poor"]),
+                  paste(summary_male_table$`Min Jump Height (m)`, " - ", summary_male_table$`Max Jump Height (m)`)
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)
+
+summary_male_table$Description <- factor(summary_male_table$Description,
+                                         levels = c(
+                                           "Excellent", "Very Good", "Good", "Above Average", "Average",
+                                           "Below Average", "Poor", "Very Poor", "Extremely Poor"))
+
+summary_male_table <- summary_male_table %>%
+  select(-`Min Jump Height (m)`, -`Max Jump Height (m)`) %>%
+  kable("html", align = "c") %>%
+  column_spec(1:3, bold = TRUE) %>%
+  row_spec(1:8, bold = TRUE) %>%
+  kable_styling(full_width = TRUE) %>%
+  row_spec(
+    which(summary_male_table$Description == "Excellent"),
+    background = "#00AA00"
+  ) %>%
+  row_spec(
+    which(summary_male_table$Description == "Very Good"),
+    background = "#00CC00"
+  ) %>%
+  row_spec(
+    which(summary_male_table$Description == "Good"),
+    background = "#00EE00"
+  ) %>%
+  row_spec(
+    which(summary_male_table$Description == "Above Average"),
+    background = "#99FF99"
+  ) %>%
+  row_spec(
+    which(summary_male_table$Description == "Average"),
+    background = "#FFFFFF"
+  ) %>%
+  row_spec(
+    which(summary_male_table$Description == "Below Average"),
+    background = "#FFF000"
+  ) %>%
+  row_spec(
+    which(summary_male_table$Description == "Poor"),
+    background = "#FF0000"
+  ) %>%
+  row_spec(
+    which(summary_male_table$Description == "Very Poor"),
+    background = "#CC0000"
+  ) %>%
+  row_spec(
+    which(summary_male_table$Description == "Extremely Poor"),
+    background = "#990000"
+  )
+
+summary_male_table
+```
+
+
+```{r, echo=FALSE, include=FALSE}
+# Save the HTML table to a file
+html_file <- "table_male.html"
+writeLines(as.character(summary_male_table), html_file)
+
+# Capture a screenshot of the table
+webshot("table_male.html", "table.png", vwidth = 500, vheight = 250)
+
+# Cleanup intermediate files
+unlink("table_male_jh.html")
+```
+
+
+
+```{r fig.cap= "Figure 1. Interactive plot of normative jump data for female athletes.",message = FALSE, warning = FALSE,fig.width = 10, fig.height = 7}
+p2 <- Df_female %>%
+  ggplot(aes(y = jump_height, x = Tscore, fill = Description, group=ID)) +
+  geom_point(position = position_jitter(width = .25), size = 4, shape = 21, color = "black") +
+  scale_fill_manual(values = c("#006600", "#33CC33", "#00CC00",
+                               "#ccffcc", "#FFFFFF", "#FFCC00",
+                               "#CC3232", "#a32828", "#7a1e1e")) +
+  theme_bw() +
+  labs(title = "Female", y = "Jump Height (m)")+
+  scale_x_continuous(breaks = seq(0, max(Df_female$Tscore), by = 10))
+
+ggplotly(p2)
+ggsave("p2.png")
+```
+
+Notice that we don't have a "very good" due to the zscore and the low sample size, those that section has been silenced (#), this should be improved with a larger sample size. For a larger sample remove the #, and add a closure ")"
+```{r}
+summary_female_table <- Df_female %>%
+  group_by(Description) %>%
+  summarise(
+    `Number of Athletes` = n(),
+    `Min Jump Height (m)` = format(min(jump_height), digits = 2),
+    `Max Jump Height (m)` = format(max(jump_height), digits = 2)
+  )
+
+summary_female_table$`Jump Height (m) Range` <- ifelse(
+  summary_female_table$Description == "Very Good",
+  paste("> ", summary_female_table$`Min Jump Height (m)`[summary_female_table$Description == "Very Good"]    ),
+    ifelse(
+      summary_female_table$Description == "Good",
+      paste(summary_female_table$`Min Jump Height (m)`[summary_female_table$Description == "Good"], 
+            " - ", 
+            summary_female_table$`Min Jump Height (m)`[summary_female_table$Description == "Very Good"]),
+      ifelse(
+        summary_female_table$Description == "Above Average",
+        paste(summary_female_table$`Min Jump Height (m)`[summary_female_table$Description == "Above Average"], 
+              " - ", 
+              summary_female_table$`Min Jump Height (m)`[summary_female_table$Description == "Good"]),
+        ifelse(
+          summary_female_table$Description == "Average",
+          paste(summary_female_table$`Min Jump Height (m)`[summary_female_table$Description == "Average"], 
+                " - ", 
+                summary_female_table$`Min Jump Height (m)`[summary_female_table$Description == "Above Average"]),
+          ifelse(
+            summary_female_table$Description == "Below Average",
+            paste(summary_female_table$`Min Jump Height (m)`[summary_female_table$Description == "Below Average"], 
+                  " - ", 
+                  summary_female_table$`Min Jump Height (m)`[summary_female_table$Description == "Average"]),
+            ifelse(
+              summary_female_table$Description == "Poor",
+              paste(summary_female_table$`Min Jump Height (m)`[summary_female_table$Description == "Poor"], 
+                    " - ", 
+                    summary_female_table$`Min Jump Height (m)`[summary_female_table$Description == "Below Average"]),
+              ifelse(
+                summary_female_table$Description == "Very Poor",
+                paste(summary_female_table$`Min Jump Height (m)`[summary_female_table$Description == "Very Poor"], 
+                      " - ", 
+                      summary_female_table$`Min Jump Height (m)`[summary_female_table$Description == "Poor"]),
+                ifelse(
+                  summary_female_table$Description == "Extremely Poor",
+                  paste("< ", summary_female_table$`Min Jump Height (cm)`[summary_female_table$Description == "Very Poor"]),
+                  paste(summary_female_table$`Min Jump Height (m)`, " - ", summary_female_table$`Max Jump Height (m)`)
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+
+summary_female_table$Description <- factor(
+  summary_female_table$Description,
+  levels = c(
+    "Very Good",
+    "Good",
+    "Above Average",
+    "Average",
+    "Below Average",
+    "Poor",
+    "Very Poor",
+    "Extremely Poor"
+  )
+)
+
+summary_female_table <- summary_female_table %>%
+  select(-`Min Jump Height (m)`, -`Max Jump Height (m)`) %>%
+  kable("html", align = "c") %>%
+  column_spec(1:3, bold = TRUE) %>%
+  row_spec(
+    which(summary_female_table$Description == "Very Good"),
+    background = "#00CC00"
+  ) %>%
+  row_spec(
+    which(summary_female_table$Description == "Good"),
+    background = "#00EE00"
+  ) %>%
+  row_spec(
+    which(summary_female_table$Description == "Above Average"),
+    background = "#99FF99"
+  ) %>%
+  row_spec(
+    which(summary_female_table$Description == "Average"),
+    background = "#FFFFFF"
+  ) %>%
+  row_spec(
+    which(summary_female_table$Description == "Below Average"),
+    background = "#FFF000"
+  ) %>%
+  row_spec(
+    which(summary_female_table$Description == "Poor"),
+    background = "#FF0000"
+  ) %>%
+  row_spec(
+    which(summary_female_table$Description == "Very Poor"),
+    background = "#CC0000"
+  ) %>%
+  row_spec(
+    which(summary_female_table$Description == "Extremely Poor"),
+    background = "#990000"
+  )
+
+summary_female_table
+```
+
+
+```{r, echo=FALSE, include=FALSE}
+# Save the HTML table to a file
+html_file <- "table_female.html"
+writeLines(as.character(summary_female_table), html_file)
+
+# Capture a screenshot of the table
+webshot("table_female.html", "table_female_jh.png", vwidth = 500, vheight = 250)
+
+# Cleanup intermediate files
+unlink("table_female.html")
+```
+
+
+
+```{r,fig.width=10}
+ggarrange(p1,p2)+ theme_prism()
+
+ggsave("normative_bysex.png")
+```
+
+
+## Distribuition of Jump Height by groups
+
+```{r}
+p3 <- Df %>% ggplot(aes(x = sex, y = jump_height, fill = sex)) +
+  geom_flat_violin(aes(fill = sex),
+      position = position_nudge(x =.1, y=0), adjust = 1.5,trim = F, alpha =.5) +
+  geom_point(aes(x=sex, y=jump_height,colour=sex),
+             position = position_jitter(width = .05), size = 2.5, shape = 20)+
+  geom_boxplot(aes(x = sex, y = jump_height, fill = sex),outlier.shape
+               = NA, alpha = .5, width = .15, colour = "black")+
+  coord_cartesian(ylim=c(0.22,0.72)) +
+  scale_colour_brewer(palette = "Dark2")+
+  scale_fill_brewer(palette = "Dark2")+ theme_bw() +
+  ylab('Vertical Jump Height (m)')+
+  xlab('Group') + theme_prism()
+p3 
+
+```
+
+
+
+```{r}
+p4 <- Df %>% ggplot(aes(x = events, y = jump_height, fill = sex)) +
+  geom_flat_violin(aes(fill = sex),
+                   position = position_nudge(x =.1, y=0), adjust = 1.5,trim = F, alpha =.5) +
+  geom_point(aes(x=events, y=jump_height,colour=sex),
+             position = position_jitter(width = .05), size = 2.5, shape = 20)+
+  geom_boxplot(aes(x = events, y = jump_height, fill = sex),outlier.shape
+               = NA, alpha = .5, width = .15, colour = "black")+
+  coord_cartesian(ylim=c(0.22,0.75)) +
+  scale_colour_brewer(palette = "Dark2")+
+  scale_fill_brewer(palette = "Dark2")+ theme_bw() +
+  ylab('Vertical Jump Height (m)')+
+  xlab('Group') + theme_prism()
+p4
+```
+
+
+```{r}
+p5 <- Df %>% ggplot(aes(x = events, y = jump_height, fill = events)) +
+  geom_flat_violin(aes(fill = events),
+                   position = position_nudge(x =.1, y=0), adjust = 1.5,trim = F, alpha =.5) +
+  geom_point(aes(x=events, y=jump_height,colour=events),
+             position = position_jitter(width = .05), size = 2.5, shape = 20)+
+  geom_boxplot(aes(x = events, y = jump_height, fill = events),outlier.shape
+               = NA, alpha = .5, width = .15, colour = "black")+
+  coord_cartesian(ylim=c(0.22,0.8)) +
+  scale_colour_brewer(palette = "Dark2")+
+  scale_fill_brewer(palette = "Dark2")+ theme_bw() +
+  ylab('Vertical Jump Height (m)')+
+  xlab('Group') + theme_prism()
+p5
+```
+
+
+```{r}
+ggarrange(p5,p4, ncol = 1)
+```
+
+
+
+```{r}
+table1(~jump_height + jump_momentum + 
+         m_rsi + stiffness + positive_net_impulse | sex, data=Df )
+```
+
+
+
+
+# Logistic Regresion CMJ and Team
+
+```{r}
+# If "No" is represented as "No" and "Yes" is represented as "Yes" in the dataset
+# Convert "No" to 0 and "Yes" to 1
+Df$team <- ifelse(Df$team == "Yes", 1, 0)
+
+# Check the unique values in the "team" variable after encoding
+unique(Df$team)
+
+# Fit a logistic regression model
+model <- glm(team ~ jump_height, data = Df, family = binomial)
+
+summary(model)
+
+```
+
+
+
+
+
+
+## Zscore for RSI
+
+Creation and distribution of the zscore. First need to create two data frames, one for males and one for females.
+
+```{r, echo=FALSE}
+Df_sex_mrsi <- Df %>% select(ID,sex,m_rsi)
+
+#tscore male
+Df_male_mrsi <- Df_sex_mrsi %>% filter(sex=="Male")
+
+Df_male_mrsi <- Df_male_mrsi %>% 
+  mutate(zscore = (m_rsi - mean(m_rsi))/sd(m_rsi))
+
+t_male_mrsi_plot<- Df_male_mrsi %>% ggplot(aes(zscore)) + geom_density() + theme_prism()+
+  labs(title="Males")
+
+# Tscore female
+Df_female_mrsi <- Df_sex_mrsi %>% filter(sex=="Female")
+
+Df_female_mrsi <- Df_female_mrsi %>% 
+  mutate(zscore = (m_rsi - mean(m_rsi))/sd(m_rsi))
+
+t_female_mrsi_plot <- Df_female_mrsi %>% ggplot(aes(zscore)) + geom_density() + theme_prism() + labs(title="Females")
+
+
+#plot together
+ggarrange(t_male_mrsi_plot,t_female_mrsi_plot, ncol = 1)
+```
+
+
+```{r}
+Df_male_mrsi <- Df_male_mrsi%>% mutate(Tscore =  zscore*10+50)
+Df_female_mrsi <- Df_female_mrsi%>% mutate(Tscore =  zscore*10+50)
+
+
+Df_male_mrsi <- Df_male_mrsi %>% mutate(Description = 
+                            case_when(Tscore > 80 ~ 'Excellent',
+                                    Tscore <= 80 & Tscore > 70  ~ 'Very Good',
+                                    Tscore <= 70 & Tscore > 60  ~ 'Good',
+                                    Tscore <= 60 & Tscore > 50  ~ 'Above Average',
+                                    Tscore <= 50 & Tscore > 45  ~ 'Average',
+                                    Tscore <= 45 & Tscore > 40  ~ 'Below Average',
+                                    Tscore <= 40 & Tscore > 30  ~ 'Poor',
+                                    Tscore <= 30 & Tscore > 20  ~ 'Very Poor',
+                                    Tscore <= 20  ~ 'Extremely Poor')) 
+
+Df_male_mrsi$Description <- factor(Df_male_mrsi$Description,
+                             levels = c("Excellent", "Very Good", "Good", 
+                                        "Above Average", "Average",
+                                        "Below Average","Poor", 
+                                        "Very Poor", "Extremely Poor"),
+                             ordered = TRUE)
+
+Df_female_mrsi <- Df_female_mrsi %>% mutate(Description = 
+                            case_when(Tscore > 80 ~ 'Excellent',
+                                    Tscore <= 80 & Tscore > 70  ~ 'Very Good',
+                                    Tscore <= 70 & Tscore > 60  ~ 'Good',
+                                    Tscore <= 60 & Tscore > 50  ~ 'Above Average',
+                                    Tscore <= 50 & Tscore > 45  ~ 'Average',
+                                    Tscore <= 45 & Tscore > 40  ~ 'Below Average',
+                                    Tscore <= 40 & Tscore > 30  ~ 'Poor',
+                                    Tscore <= 30 & Tscore > 20  ~ 'Very Poor',
+                                    Tscore <= 20  ~ 'Extremely Poor')) 
+
+Df_female_mrsi$Description <- factor(Df_female_mrsi$Description,
+                             levels = c("Excellent", "Very Good", "Good", 
+                                        "Above Average", "Average",
+                                        "Below Average","Poor", 
+                                        "Very Poor", "Extremely Poor"),
+                             ordered = TRUE)
+```
+
+##Interactive Plots
+
+
+```{r fig.cap= "Figure 1. Interactive plot of normative jump data for male athletes.",message = FALSE, warning = FALSE,fig.width = 10, fig.height = 7}
+p1 <- Df_male_mrsi %>%
+  ggplot(aes(y = m_rsi, x = Tscore, fill = Description)) +
+  geom_point(position = position_jitter(width = .25), size = 4, shape = 21, color = "black") +
+  scale_fill_manual(values = c("#006600", "#33CC33", "#00CC00",
+                               "#ccffcc", "#FFFFFF", "#FFCC00",
+                               "#CC3232", "#a32828", "#7a1e1e")) +
+  theme_bw() +
+  labs(title = "Male", y = "mRSI")
+
+ggplotly(p1)
+#ggsave("p1.png")
+```
+
+
+```{r}
+#Replace 'Min Jump Height' and "max Jump Height' for variable of interest
+summary_male_mrsi_table <- Df_male_mrsi %>%
+  group_by(Description) %>%
+  summarise(
+    `Number of Athletes` = n(),
+    `Min m_rsi` = format(min(m_rsi), digits = 2),
+    `Max m_rsi` = format(max(m_rsi), digits = 2))
+
+summary_male_mrsi_table$`m_rsi Range` <- ifelse(
+  summary_male_mrsi_table$Description == "Very Good",
+  paste("> ", summary_male_mrsi_table$`Min m_rsi`[summary_male_mrsi_table$Description == "Very Good"]),
+  ifelse(
+    summary_male_mrsi_table$Description == "Very Good",
+    paste(summary_male_mrsi_table$`Min m_rsi`[summary_male_mrsi_table$Description == "Very Good"],
+          " - ",
+          summary_male_mrsi_table$`Min m_rsi`[summary_male_mrsi_table$Description == "Very Good"]
+    ),
+    ifelse(
+      summary_male_mrsi_table$Description == "Good",
+      paste(summary_male_mrsi_table$`Min m_rsi`[summary_male_mrsi_table$Description == "Good"], 
+            " - ", 
+            summary_male_mrsi_table$`Min m_rsi`[summary_male_mrsi_table$Description == "Very Good"]),
+      ifelse(
+        summary_male_mrsi_table$Description == "Above Average",
+        paste(summary_male_mrsi_table$`Max m_rsi`[summary_male_mrsi_table$Description == "Average"], 
+              " - ", 
+              summary_male_mrsi_table$`Min m_rsi`[summary_male_mrsi_table$Description == "Good"]),
+        ifelse(
+          summary_male_mrsi_table$Description == "Average",
+          paste(summary_male_mrsi_table$`Min m_rsi`[summary_male_mrsi_table$Description == "Average"], 
+                " - ", 
+                summary_male_mrsi_table$`Min m_rsi`[summary_male_mrsi_table$Description == "Above Average"]),
+          ifelse(
+            summary_male_mrsi_table$Description == "Below Average",
+            paste(summary_male_mrsi_table$`Min m_rsi`[summary_male_mrsi_table$Description == "Below Average"], 
+                  " - ", 
+                  summary_male_mrsi_table$`Min m_rsi`[summary_male_mrsi_table$Description == "Average"]),
+            ifelse(
+              summary_male_mrsi_table$Description == "Poor",
+              paste(summary_male_mrsi_table$`Min m_rsi`[summary_male_mrsi_table$Description == "Poor"], 
+                    " - ", 
+                    summary_male_mrsi_table$`Min m_rsi`[summary_male_mrsi_table$Description == "Below Average"]),
+              ifelse(
+                summary_male_mrsi_table$Description == "Very Poor",
+                paste(summary_male_mrsi_table$`Min m_rsi`[summary_male_mrsi_table$Description == "Very Poor"], 
+                      " - ", 
+                      summary_male_mrsi_table$`Min m_rsi`[summary_male_mrsi_table$Description == "Poor"]),
+                ifelse(
+                  summary_male_mrsi_table$Description == "Extremely Poor",
+                  paste("< ", summary_male_mrsi_table$`Min m_rsi`[summary_male_mrsi_table$Description == "Very Poor"]),
+                  paste(summary_male_mrsi_table$`Min m_rsi`, " - ", summary_male_mrsi_table$`Max Jump Height (m)`)
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)
+
+summary_male_mrsi_table$Description <- factor(summary_male_mrsi_table$Description,
+                                         levels = c(
+                                           "Excellent", "Very Good", "Good", "Above Average", "Average",
+                                           "Below Average", "Poor", "Very Poor", "Extremely Poor"))
+
+summary_male_mrsi_table <- summary_male_mrsi_table %>%
+  select(-`Min m_rsi`, -`Max m_rsi`) %>%
+  kable("html", align = "c") %>%
+  column_spec(1:3, bold = TRUE) %>%
+  row_spec(1:8, bold = TRUE) %>%
+  kable_styling(full_width = TRUE) %>%
+  row_spec(
+    which(summary_male_mrsi_table$Description == "Excellent"),
+    background = "#00AA00"
+  ) %>%
+  row_spec(
+    which(summary_male_mrsi_table$Description == "Very Good"),
+    background = "#00CC00"
+  ) %>%
+  row_spec(
+    which(summary_male_mrsi_table$Description == "Good"),
+    background = "#00EE00"
+  ) %>%
+  row_spec(
+    which(summary_male_mrsi_table$Description == "Above Average"),
+    background = "#99FF99"
+  ) %>%
+  row_spec(
+    which(summary_male_mrsi_table$Description == "Average"),
+    background = "#FFFFFF"
+  ) %>%
+  row_spec(
+    which(summary_male_mrsi_table$Description == "Below Average"),
+    background = "#FFF000"
+  ) %>%
+  row_spec(
+    which(summary_male_mrsi_table$Description == "Poor"),
+    background = "#FF0000"
+  ) %>%
+  row_spec(
+    which(summary_male_mrsi_table$Description == "Very Poor"),
+    background = "#CC0000"
+  ) %>%
+  row_spec(
+    which(summary_male_mrsi_table$Description == "Extremely Poor"),
+    background = "#990000"
+  )
+
+summary_male_mrsi_table
+```
+
+
+
+```{r, echo=FALSE, include=FALSE}
+# Save the HTML table to a file
+html_file <- "summary_male_mrsi_table.html"
+writeLines(as.character(summary_male_mrsi_table), html_file)
+
+# Capture a screenshot of the table
+webshot("summary_male_mrsi_table.html", "male_rsi_table.png", vwidth = 500, vheight = 250)
+
+# Cleanup intermediate files
+unlink("summary_male_mrsi_table.html")
+```
+
+
+```{r, echo=FALSE, include=FALSE}
+# Save the HTML table to a file
+html_file <- "summary_male_mrsi_table.html"
+writeLines(as.character(summary_female_table), html_file)
+
+# Capture a screenshot of the table
+webshot("summary_male_mrsi_table.html", "table_female.png", vwidth = 500, vheight = 250)
+
+# Cleanup intermediate files
+unlink("summary_male_mrsi_table.html")
+```
+
+
+```{r fig.cap= "Figure 1. Interactive plot of normative jump data for female athletes.",message = FALSE, warning = FALSE,fig.width = 10, fig.height = 7}
+p2 <- Df_female_mrsi %>%
+  ggplot(aes(y = m_rsi, x = Tscore, fill = Description)) +
+  geom_point(position = position_jitter(width = .25), size = 4, shape = 21, color = "black") +
+  scale_fill_manual(values = c("#006600", "#33CC33", "#00CC00",
+                               "#ccffcc", "#FFFFFF", "#FFCC00",
+                               "#CC3232", "#a32828", "#7a1e1e")) +
+  theme_bw() +
+  labs(title = "Female", y = "mRSI")
+
+ggplotly(p2)
+#ggsave("p2.png")
+```
+
+Notice that we don't have a "very good" due to the zscore and the low sample size, those that section has been silenced (#), this should be improved with a larger sample size. For a larger sample remove the #, and add a closure ")"
+```{r}
+summary_female_mrsi_table <- Df_female_mrsi %>%
+  group_by(Description) %>%
+  summarise(
+    `Number of Athletes` = n(),
+    `Min m_rsi` = format(min(m_rsi), digits = 2),
+    `Max m_rsi` = format(max(m_rsi), digits = 2)
+  )
+
+summary_female_mrsi_table$`m_rsi Range` <- ifelse(
+  summary_female_mrsi_table$Description == "Very Good",
+  paste("> ", summary_female_mrsi_table$`Min m_rsi`[summary_female_mrsi_table$Description == "Very Good"]),
+  ifelse(
+    summary_female_mrsi_table$Description == "Very Good",
+    paste(summary_female_mrsi_table$`Min m_rsi`[summary_female_mrsi_table$Description == "Very Good"],
+          " - ",
+          summary_female_mrsi_table$`Min m_rsi`[summary_female_mrsi_table$Description == "Very Good"]
+    ),
+    ifelse(
+      summary_female_mrsi_table$Description == "Good",
+      paste(summary_female_mrsi_table$`Min m_rsi`[summary_female_mrsi_table$Description == "Good"], 
+            " - ", 
+            summary_female_mrsi_table$`Min m_rsi`[summary_female_mrsi_table$Description == "Very Good"]),
+      ifelse(
+        summary_female_mrsi_table$Description == "Above Average",
+        paste(summary_female_mrsi_table$`Max m_rsi`[summary_female_mrsi_table$Description == "Average"], 
+              " - ", 
+              summary_female_mrsi_table$`Min m_rsi`[summary_female_mrsi_table$Description == "Good"]),
+        ifelse(
+          summary_female_mrsi_table$Description == "Average",
+          paste(summary_female_mrsi_table$`Min m_rsi`[summary_female_mrsi_table$Description == "Average"], 
+                " - ", 
+                summary_female_mrsi_table$`Min m_rsi`[summary_female_mrsi_table$Description == "Above Average"]),
+          ifelse(
+            summary_female_mrsi_table$Description == "Below Average",
+            paste(summary_female_mrsi_table$`Min m_rsi`[summary_female_mrsi_table$Description == "Below Average"], 
+                  " - ", 
+                  summary_female_mrsi_table$`Min m_rsi`[summary_female_mrsi_table$Description == "Average"]),
+            ifelse(
+              summary_female_mrsi_table$Description == "Poor",
+              paste(summary_female_mrsi_table$`Min m_rsi`[summary_female_mrsi_table$Description == "Poor"], 
+                    " - ", 
+                    summary_female_mrsi_table$`Min m_rsi`[summary_female_mrsi_table$Description == "Below Average"]),
+              ifelse(
+                summary_female_mrsi_table$Description == "Very Poor",
+                paste(summary_female_mrsi_table$`Min m_rsi`[summary_female_mrsi_table$Description == "Very Poor"], 
+                      " - ", 
+                      summary_female_mrsi_table$`Min m_rsi`[summary_female_mrsi_table$Description == "Poor"]),
+                ifelse(
+                  summary_female_mrsi_table$Description == "Extremely Poor",
+                  paste("< ", summary_female_mrsi_table$`Min m_rsi`[summary_female_mrsi_table$Description == "Very Poor"]),
+                  paste(summary_female_mrsi_table$`Min m_rsi`, " - ", summary_female_mrsi_table$`Max Jump Height (m)`)
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)
+
+summary_female_mrsi_table$Description <- factor(
+  summary_female_mrsi_table$Description,
+  levels = c(
+    "Excellent", "Very Good", "Good", "Above Average", "Average",
+    "Below Average", "Poor", "Very Poor", "Extremely Poor"
+  )
+)
+
+summary_female_mrsi_table <- summary_female_mrsi_table %>%
+  select(-`Min m_rsi`, -`Max m_rsi`) %>%
+  kable("html", align = "c") %>%
+  column_spec(1:3, bold = TRUE) %>%
+  row_spec(
+    which(summary_female_mrsi_table$Description == "Excellent"),
+    background = "#00AA00"
+  ) %>%
+  row_spec(
+    which(summary_female_mrsi_table$Description == "Very Good"),
+    background = "#00CC00"
+  ) %>%
+  row_spec(
+    which(summary_female_mrsi_table$Description == "Good"),
+    background = "#00EE00"
+  ) %>%
+  row_spec(
+    which(summary_female_mrsi_table$Description == "Above Average"),
+    background = "#99FF99"
+  ) %>%
+  row_spec(
+    which(summary_female_mrsi_table$Description == "Average"),
+    background = "#FFFFFF"
+  ) %>%
+  row_spec(
+    which(summary_female_mrsi_table$Description == "Below Average"),
+    background = "#FFF000"
+  ) %>%
+  row_spec(
+    which(summary_female_mrsi_table$Description == "Poor"),
+    background = "#FF0000"
+  ) %>%
+  row_spec(
+    which(summary_female_mrsi_table$Description == "Very Poor"),
+    background = "#CC0000"
+  ) %>%
+  row_spec(
+    which(summary_female_mrsi_table$Description == "Extremely Poor"),
+    background = "#990000"
+  )
+
+summary_female_mrsi_table
+```
+
+
+```{r, echo=FALSE, include=FALSE}
+# Save the HTML table to a file
+html_file <- "table_female_mrsi.html"
+writeLines(as.character(summary_female_table), html_file)
+
+# Capture a screenshot of the table
+webshot("table_female_mrsi.html", "table_female_mrsi.png", vwidth = 500, vheight = 250)
+
+# Cleanup intermediate files
+unlink("table_female_mrsi.html")
+```
+
+
+
+```{r,fig.width=10}
+ggarrange(p1,p2)+ theme_prism()
+
+ggsave("normative_mrsi_bysex.png")
+```
+
+
+
+## Zscore for Relative net Impulse
+
+Creation and distribution of the zscore. First need to create two data frames, one for males and one for females.
+
+```{r, echo=FALSE}
+Df_sex_RPNI <- Df %>% select(ID,sex,relative_propulsive_net_impulse)
+
+#tscore male
+Df_male_RPNI <- Df_sex_RPNI %>% filter(sex=="Male")
+
+Df_male_RPNI <- Df_male_RPNI %>% 
+  mutate(zscore = (relative_propulsive_net_impulse - mean(relative_propulsive_net_impulse))/sd(relative_propulsive_net_impulse))
+
+t_male_RPNI_plot<- Df_male_RPNI %>% ggplot(aes(zscore)) + geom_density() + theme_prism()+
+  labs(title="Males")
+
+# Tscore female
+Df_female_RPNI <- Df_sex_RPNI %>% filter(sex=="Female")
+
+Df_female_RPNI <- Df_female_RPNI %>% 
+  mutate(zscore = (relative_propulsive_net_impulse - mean(relative_propulsive_net_impulse))/
+           sd(relative_propulsive_net_impulse))
+
+t_female_RPNI_plot <- Df_female_mrsi %>% ggplot(aes(zscore)) + geom_density() + theme_prism() + labs(title="Females")
+
+
+#plot together
+ggarrange(t_male_RPNI_plot,t_female_RPNI_plot, ncol = 1)
+```
+
+
+```{r}
+Df_male_RPNI <- Df_male_RPNI%>% mutate(Tscore =  zscore*10+50)
+Df_female_RPNI <- Df_female_RPNI%>% mutate(Tscore =  zscore*10+50)
+
+
+Df_male_RPNI <- Df_male_RPNI %>% mutate(Description = 
+                            case_when(Tscore > 80 ~ 'Excellent',
+                                    Tscore <= 80 & Tscore > 70  ~ 'Very Good',
+                                    Tscore <= 70 & Tscore > 60  ~ 'Good',
+                                    Tscore <= 60 & Tscore > 50  ~ 'Above Average',
+                                    Tscore <= 50 & Tscore > 45  ~ 'Average',
+                                    Tscore <= 45 & Tscore > 40  ~ 'Below Average',
+                                    Tscore <= 40 & Tscore > 30  ~ 'Poor',
+                                    Tscore <= 30 & Tscore > 20  ~ 'Very Poor',
+                                    Tscore <= 20  ~ 'Extremely Poor')) 
+
+Df_male_RPNI$Description <- factor(Df_male_RPNI$Description,
+                             levels = c("Excellent", "Very Good", "Good", 
+                                        "Above Average", "Average",
+                                        "Below Average","Poor", 
+                                        "Very Poor", "Extremely Poor"),
+                             ordered = TRUE)
+
+Df_female_RPNI <- Df_female_RPNI %>% mutate(Description = 
+                            case_when(Tscore > 80 ~ 'Excellent',
+                                    Tscore <= 80 & Tscore > 70  ~ 'Very Good',
+                                    Tscore <= 70 & Tscore > 60  ~ 'Good',
+                                    Tscore <= 60 & Tscore > 50  ~ 'Above Average',
+                                    Tscore <= 50 & Tscore > 45  ~ 'Average',
+                                    Tscore <= 45 & Tscore > 40  ~ 'Below Average',
+                                    Tscore <= 40 & Tscore > 30  ~ 'Poor',
+                                    Tscore <= 30 & Tscore > 20  ~ 'Very Poor',
+                                    Tscore <= 20  ~ 'Extremely Poor')) 
+
+Df_female_RPNI$Description <- factor(Df_female_RPNI$Description,
+                             levels = c("Excellent", "Very Good", "Good", 
+                                        "Above Average", "Average",
+                                        "Below Average","Poor", 
+                                        "Very Poor", "Extremely Poor"),
+                             ordered = TRUE)
+```
+
+##Interactive Plots
+
+
+```{r fig.cap= "Figure 1. Interactive plot of normative jump data for male athletes.",message = FALSE, warning = FALSE,fig.width = 10, fig.height = 7}
+p1 <- Df_male_RPNI %>%
+  ggplot(aes(y = relative_propulsive_net_impulse, x = Tscore, fill = Description)) +
+  geom_point(position = position_jitter(width = .25), size = 4, shape = 21, color = "black") +
+  scale_fill_manual(values = c("#006600", "#33CC33", "#00CC00",
+                               "#ccffcc", "#FFFFFF", "#FFCC00",
+                               "#CC3232", "#a32828", "#7a1e1e")) +
+  theme_bw() +
+  labs(title = "Male", y = "Relative Net Impulse (Ns/kg)")
+
+ggplotly(p1)
+#ggsave("p1.png")
+```
+
+
+```{r}
+#Replace 'Min Jump Height' and "max Jump Height' for variable of interest
+summary_male_RPNI_table <- Df_male_RPNI %>%
+  group_by(Description) %>%
+  summarise(
+    `Number of Athletes` = n(),
+    `Min relative_propulsive_net_impulse` = format(min(relative_propulsive_net_impulse), digits = 2),
+    `Max relative_propulsive_net_impulse` = format(max(relative_propulsive_net_impulse), digits = 2))
+
+summary_male_RPNI_table$`relative_propulsive_net_impulse Range` <- ifelse(
+  summary_male_RPNI_table$Description == "Very Good",
+  paste("> ", summary_male_RPNI_table$`Min relative_propulsive_net_impulse`[summary_male_RPNI_table$Description == "Very Good"]),
+  ifelse(
+    summary_male_RPNI_table$Description == "Very Good",
+    paste(summary_male_RPNI_table$`Min relative_propulsive_net_impulse`[summary_male_RPNI_table$Description == "Very Good"],
+          " - ",
+          summary_male_RPNI_table$`Min relative_propulsive_net_impulse`[summary_male_RPNI_table$Description == "Very Good"]
+    ),
+    ifelse(
+      summary_male_RPNI_table$Description == "Good",
+      paste(summary_male_RPNI_table$`Min relative_propulsive_net_impulse`[summary_male_RPNI_table$Description == "Good"], 
+            " - ", 
+            summary_male_RPNI_table$`Min relative_propulsive_net_impulse`[summary_male_RPNI_table$Description == "Very Good"]),
+      ifelse(
+        summary_male_RPNI_table$Description == "Above Average",
+        paste(summary_male_RPNI_table$`Max relative_propulsive_net_impulse`[summary_male_RPNI_table$Description == "Average"], 
+              " - ", 
+              summary_male_RPNI_table$`Min relative_propulsive_net_impulse`[summary_male_RPNI_table$Description == "Good"]),
+        ifelse(
+          summary_male_RPNI_table$Description == "Average",
+          paste(summary_male_RPNI_table$`Min relative_propulsive_net_impulse`[summary_male_RPNI_table$Description == "Average"], 
+                " - ", 
+                summary_male_RPNI_table$`Min relative_propulsive_net_impulse`[summary_male_RPNI_table$Description == "Above Average"]),
+          ifelse(
+            summary_male_RPNI_table$Description == "Below Average",
+            paste(summary_male_RPNI_table$`Min relative_propulsive_net_impulse`[summary_male_RPNI_table$Description == "Below Average"], 
+                  " - ", 
+                  summary_male_RPNI_table$`Min relative_propulsive_net_impulse`[summary_male_RPNI_table$Description == "Average"]),
+            ifelse(
+              summary_male_RPNI_table$Description == "Poor",
+              paste(summary_male_RPNI_table$`Min relative_propulsive_net_impulse`[summary_male_RPNI_table$Description == "Poor"], 
+                    " - ", 
+                    summary_male_RPNI_table$`Min relative_propulsive_net_impulse`[summary_male_RPNI_table$Description == "Below Average"]),
+              ifelse(
+                summary_male_RPNI_table$Description == "Very Poor",
+                paste(summary_male_RPNI_table$`Min relative_propulsive_net_impulse`[summary_male_RPNI_table$Description == "Very Poor"], 
+                      " - ", 
+                      summary_male_RPNI_table$`Min relative_propulsive_net_impulse`[summary_male_RPNI_table$Description == "Poor"]),
+                ifelse(
+                  summary_male_RPNI_table$Description == "Extremely Poor",
+                  paste("< ", summary_male_RPNI_table$`Min relative_propulsive_net_impulse`[summary_male_RPNI_table$Description == "Very Poor"]),
+                  paste(summary_male_RPNI_table$`Min relative_propulsive_net_impulse`, " - ", summary_male_RPNI_table$`Max Jump Height (m)`)
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)
+
+summary_male_RPNI_table$Description <- factor(summary_male_RPNI_table$Description,
+                                         levels = c(
+                                           "Excellent", "Very Good", "Good", "Above Average", "Average",
+                                           "Below Average", "Poor", "Very Poor", "Extremely Poor"))
+
+summary_male_RPNI_table <- summary_male_RPNI_table %>%
+  select(-`Min relative_propulsive_net_impulse`, -`Max relative_propulsive_net_impulse`) %>%
+  kable("html", align = "c") %>%
+  column_spec(1:3, bold = TRUE) %>%
+  row_spec(1:6, bold = TRUE) %>%
+  kable_styling(full_width = TRUE)%>%
+  row_spec(
+    which(summary_male_RPNI_table$Description == "Very Good"),
+    background = "#00CC00"
+  ) %>%
+  row_spec(
+    which(summary_male_RPNI_table$Description == "Good"),
+    background = "#00EE00"
+  ) %>%
+  row_spec(
+    which(summary_male_RPNI_table$Description == "Above Average"),
+    background = "#99FF99"
+  ) %>%
+  row_spec(
+    which(summary_male_RPNI_table$Description == "Average"),
+    background = "#FFFFFF"
+  ) %>%
+  row_spec(
+    which(summary_male_RPNI_table$Description == "Below Average"),
+    background = "#FFF000"
+  ) %>%
+  row_spec(
+    which(summary_male_RPNI_table$Description == "Poor"),
+    background = "#FF0000"
+  ) %>%
+  row_spec(
+    which(summary_male_RPNI_table$Description == "Very Poor"),
+    background = "#CC0000"
+  ) 
+
+summary_male_RPNI_table
+```
+
+```{r, echo=FALSE, include=FALSE}
+# Save the HTML table to a file
+html_file <- "table_male.html"
+writeLines(as.character(summary_male_RPNI_table), html_file)
+
+# Capture a screenshot of the table
+webshot("table_male.html", "table_male_RPNI.png", vwidth = 500, vheight = 250)
+
+# Cleanup intermediate files
+unlink("table_male.html")
+```
+
+
+
+
+```{r fig.cap= "Figure 1. Interactive plot of normative jump data for female athletes.",message = FALSE, warning = FALSE,fig.width = 10, fig.height = 7}
+p2 <- Df_female_RPNI %>%
+  ggplot(aes(y = relative_propulsive_net_impulse, x = Tscore, fill = Description)) +
+  geom_point(position = position_jitter(width = .25), size = 4, shape = 21, color = "black") +
+  scale_fill_manual(values = c("#006600", "#33CC33", "#00CC00",
+                               "#ccffcc", "#FFFFFF", "#FFCC00",
+                               "#CC3232", "#a32828", "#7a1e1e")) +
+  theme_bw() +
+  labs(title = "Female", y = "Relative Net Impulse (Ns/kg)")
+
+ggplotly(p2)
+#ggsave("p2.png")
+```
+
+Notice that we don't have a "very good" due to the zscore and the low sample size, those that section has been silenced (#), this should be improved with a larger sample size. For a larger sample remove the #, and add a closure ")"
+```{r}
+summary_female_RPNI_table <- Df_female_RPNI %>%
+  group_by(Description) %>%
+  summarise(
+    `Number of Athletes` = n(),
+    `Min relative_propulsive_net_impulse` = format(min(relative_propulsive_net_impulse), digits = 2),
+    `Max relative_propulsive_net_impulse` = format(max(relative_propulsive_net_impulse), digits = 2)
+  )
+
+summary_female_RPNI_table$`relative_propulsive_net_impulse Range` <- ifelse(
+  summary_female_RPNI_table$Description == "Very Good",
+  paste("> ", summary_female_RPNI_table$`Min relative_propulsive_net_impulse`[summary_female_RPNI_table$Description == "Very Good"]),
+  ifelse(
+    summary_female_RPNI_table$Description == "Very Good",
+    paste(summary_female_RPNI_table$`Min relative_propulsive_net_impulse`[summary_female_RPNI_table$Description == "Very Good"],
+          " - ",
+          summary_female_RPNI_table$`Min relative_propulsive_net_impulse`[summary_female_RPNI_table$Description == "Very Good"]
+    ),
+    ifelse(
+      summary_female_RPNI_table$Description == "Good",
+      paste(summary_female_RPNI_table$`Min relative_propulsive_net_impulse`[summary_female_RPNI_table$Description == "Good"], 
+            " - ", 
+            summary_female_RPNI_table$`Min relative_propulsive_net_impulse`[summary_female_RPNI_table$Description == "Very Good"]),
+      ifelse(
+        summary_female_RPNI_table$Description == "Above Average",
+        paste(summary_female_RPNI_table$`Max relative_propulsive_net_impulse`[summary_female_RPNI_table$Description == "Average"], 
+              " - ", 
+              summary_female_RPNI_table$`Min relative_propulsive_net_impulse`[summary_female_RPNI_table$Description == "Good"]),
+        ifelse(
+          summary_female_RPNI_table$Description == "Average",
+          paste(summary_female_RPNI_table$`Min relative_propulsive_net_impulse`[summary_female_RPNI_table$Description == "Average"], 
+                " - ", 
+                summary_female_RPNI_table$`Min relative_propulsive_net_impulse`[summary_female_RPNI_table$Description == "Above Average"]),
+          ifelse(
+            summary_female_RPNI_table$Description == "Below Average",
+            paste(summary_female_RPNI_table$`Min relative_propulsive_net_impulse`[summary_female_RPNI_table$Description == "Below Average"], 
+                  " - ", 
+                  summary_female_RPNI_table$`Min relative_propulsive_net_impulse`[summary_female_RPNI_table$Description == "Average"]),
+            ifelse(
+              summary_female_RPNI_table$Description == "Poor",
+              paste(summary_female_RPNI_table$`Min relative_propulsive_net_impulse`[summary_female_RPNI_table$Description == "Poor"], 
+                    " - ", 
+                    summary_female_RPNI_table$`Min relative_propulsive_net_impulse`[summary_female_RPNI_table$Description == "Below Average"]),
+              ifelse(
+                summary_female_RPNI_table$Description == "Very Poor",
+                paste(summary_female_RPNI_table$`Min relative_propulsive_net_impulse`[summary_female_RPNI_table$Description == "Very Poor"], 
+                      " - ", 
+                      summary_female_RPNI_table$`Min relative_propulsive_net_impulse`[summary_female_RPNI_table$Description == "Poor"]),
+                ifelse(
+                  summary_female_RPNI_table$Description == "Extremely Poor",
+                  paste("< ", summary_female_RPNI_table$`Min relative_propulsive_net_impulse`[summary_female_RPNI_table$Description == "Very Poor"]),
+                  paste(summary_female_RPNI_table$`Min relative_propulsive_net_impulse`, " - ", summary_female_RPNI_table$`Max Jump Height (m)`)
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)
+
+summary_female_RPNI_table$Description <- factor(summary_female_RPNI_table$Description,
+                                               levels = c(
+                                                 "Excellent", "Very Good", "Good", "Above Average", "Average",
+                                                 "Below Average", "Poor", "Very Poor", "Extremely Poor"))
+
+summary_female_RPNI_table <- summary_female_RPNI_table %>%
+  select(-`Min relative_propulsive_net_impulse`, -`Max relative_propulsive_net_impulse`) %>%
+  kable("html", align = "c") %>%
+  column_spec(1:3, bold = TRUE) %>%
+  row_spec(1:6, bold = TRUE) %>%
+  kable_styling(full_width = TRUE) %>%
+  row_spec(
+    which(summary_female_RPNI_table$Description == "Very Good"),
+    background = "#00CC00"
+  ) %>%
+  row_spec(
+    which(summary_female_RPNI_table$Description == "Good"),
+    background = "#00EE00"
+  ) %>%
+  row_spec(
+    which(summary_female_RPNI_table$Description == "Above Average"),
+    background = "#99FF99"
+  ) %>%
+  row_spec(
+    which(summary_female_RPNI_table$Description == "Average"),
+    background = "#FFFFFF"
+  ) %>%
+  row_spec(
+    which(summary_female_RPNI_table$Description == "Below Average"),
+    background = "#FFF000"
+  ) %>%
+  row_spec(
+    which(summary_female_RPNI_table$Description == "Poor"),
+    background = "#FF0000"
+  ) %>%
+  row_spec(
+    which(summary_female_RPNI_table$Description == "Very Poor"),
+    background = "#CC0000"
+  ) 
+
+summary_female_RPNI_table
+```
+
+
+```{r, echo=FALSE, include=FALSE}
+# Save the HTML table to a file
+html_file <- "table_female.html"
+writeLines(as.character(summary_female_RPNI_table), html_file)
+
+# Capture a screenshot of the table
+webshot("table_female.html", "table_female_RPNI.png", vwidth = 500, vheight = 250)
+
+# Cleanup intermediate files
+unlink("table_female.html")
+```
+
+
+
+```{r,fig.width=10}
+ggarrange(p1,p2)+ theme_prism()
+
+ggsave("normative_RNPI_bysex.png")
+```
+
+
+## Zscore Peak Braking Force
+
+Creation and distribution of the zscore. First need to create two data frames, one for males and one for females.
+
+```{r, echo=FALSE}
+Df <- Df %>% mutate(peak_rp_force = peak_propulsive_force/system_weight)
+
+
+Df_sex_rp_force <- Df %>% select(ID,sex,peak_rp_force)
+
+#tscore male
+Df_male_rp_force  <- Df_sex_rp_force %>% filter(sex=="Male")
+
+Df_male_rp_force <- Df_male_rp_force %>% 
+  mutate(zscore = (peak_rp_force - mean(peak_rp_force))/sd(peak_rp_force))
+
+t_male_rp_force_plot<- Df_male_rp_force %>% ggplot(aes(zscore)) + geom_density() + theme_prism()+
+  labs(title="Males")
+
+# Tscore female
+Df_female_rp_force <- Df_sex_rp_force %>% filter(sex=="Female")
+
+Df_female_rp_force <- Df_female_rp_force %>% 
+  mutate(zscore = (peak_rp_force - mean(peak_rp_force))/
+           sd(peak_rp_force))
+
+t_female_rp_force_plot <- Df_female_rp_force %>% ggplot(aes(zscore)) + 
+  geom_density() + theme_prism() + labs(title="Females")
+
+
+#plot together
+ggarrange(t_male_rp_force_plot,t_female_rp_force_plot, ncol = 1)
+```
+
+
+```{r}
+Df_male_rp_force <- Df_male_rp_force%>% mutate(Tscore =  zscore*10+50)
+Df_female_rp_force <- Df_female_rp_force%>% mutate(Tscore =  zscore*10+50)
+
+
+Df_male_rp_force <- Df_male_rp_force %>% mutate(Description = 
+                            case_when(Tscore > 80 ~ 'Excellent',
+                                    Tscore <= 80 & Tscore > 70  ~ 'Very Good',
+                                    Tscore <= 70 & Tscore > 60  ~ 'Good',
+                                    Tscore <= 60 & Tscore > 50  ~ 'Above Average',
+                                    Tscore <= 50 & Tscore > 45  ~ 'Average',
+                                    Tscore <= 45 & Tscore > 40  ~ 'Below Average',
+                                    Tscore <= 40 & Tscore > 30  ~ 'Poor',
+                                    Tscore <= 30 & Tscore > 20  ~ 'Very Poor',
+                                    Tscore <= 20  ~ 'Extremely Poor')) 
+
+Df_male_rp_force$Description <- factor(Df_male_rp_force$Description,
+                             levels = c("Excellent", "Very Good", "Good", 
+                                        "Above Average", "Average",
+                                        "Below Average","Poor", 
+                                        "Very Poor", "Extremely Poor"),
+                             ordered = TRUE)
+
+Df_female_rp_force <- Df_female_rp_force %>% mutate(Description = 
+                            case_when(Tscore > 80 ~ 'Excellent',
+                                    Tscore <= 80 & Tscore > 70  ~ 'Very Good',
+                                    Tscore <= 70 & Tscore > 60  ~ 'Good',
+                                    Tscore <= 60 & Tscore > 50  ~ 'Above Average',
+                                    Tscore <= 50 & Tscore > 45  ~ 'Average',
+                                    Tscore <= 45 & Tscore > 40  ~ 'Below Average',
+                                    Tscore <= 40 & Tscore > 30  ~ 'Poor',
+                                    Tscore <= 30 & Tscore > 20  ~ 'Very Poor',
+                                    Tscore <= 20  ~ 'Extremely Poor')) 
+
+Df_female_rp_force$Description <- factor(Df_female_rp_force$Description,
+                             levels = c("Excellent", "Very Good", "Good", 
+                                        "Above Average", "Average",
+                                        "Below Average","Poor", 
+                                        "Very Poor", "Extremely Poor"),
+                             ordered = TRUE)
+```
+
+##Interactive Plots
+
+
+```{r fig.cap= "Figure 1. Interactive plot of normative jump data for male athletes.",message = FALSE, warning = FALSE,fig.width = 10, fig.height = 7}
+p1 <- Df_male_rp_force %>%
+  ggplot(aes(y = peak_rp_force, x = Tscore, fill = Description)) +
+  geom_point(position = position_jitter(width = .25), size = 4, shape = 21, color = "black") +
+  scale_fill_manual(values = c("#006600", "#33CC33", "#00CC00",
+                               "#ccffcc", "#FFFFFF", "#FFCC00",
+                               "#CC3232", "#a32828", "#7a1e1e")) +
+  theme_bw() +
+  labs(title = "Male", y = "Relative Peak Propulsive Force (N/kg)")
+
+ggplotly(p1)
+#ggsave("p1.png")
+```
+
+
+```{r}
+#Replace 'Min Jump Height' and "max Jump Height' for variable of interest
+summary_male_rp_force_table <- Df_male_rp_force %>%
+  group_by(Description) %>%
+  summarise(
+    `Number of Athletes` = n(),
+    `Min peak_rp_force   ` = format(min(peak_rp_force   ), digits = 2),
+    `Max peak_rp_force   ` = format(max(peak_rp_force   ), digits = 2))
+
+summary_male_rp_force_table$`peak_rp_force    Range` <- ifelse(
+  summary_male_rp_force_table$Description == "Excellent",
+  paste("> ", summary_male_rp_force_table$`Min peak_rp_force   `[summary_male_rp_force_table$Description == "Excellent"]),
+  ifelse(
+    summary_male_rp_force_table$Description == "Very Good",
+    paste(summary_male_rp_force_table$`Min peak_rp_force   `[summary_male_rp_force_table$Description == "Good"],
+          " - ",
+          summary_male_rp_force_table$`Min peak_rp_force   `[summary_male_rp_force_table$Description == "Very Good"]
+    ),
+    ifelse(
+      summary_male_rp_force_table$Description == "Good",
+      paste(summary_male_rp_force_table$`Min peak_rp_force   `[summary_male_rp_force_table$Description == "Good"], 
+            " - ", 
+            summary_male_rp_force_table$`Min peak_rp_force   `[summary_male_rp_force_table$Description == "Excellent"]),
+      ifelse(
+        summary_male_rp_force_table$Description == "Above Average",
+        paste(summary_male_rp_force_table$`Min peak_rp_force   `[summary_male_rp_force_table$Description == "Above Average"], 
+              " - ", 
+              summary_male_rp_force_table$`Min peak_rp_force   `[summary_male_rp_force_table$Description == "Good"]),
+        ifelse(
+          summary_male_rp_force_table$Description == "Average",
+          paste(summary_male_rp_force_table$`Min peak_rp_force   `[summary_male_rp_force_table$Description == "Average"], 
+                " - ", 
+                summary_male_rp_force_table$`Min peak_rp_force   `[summary_male_rp_force_table$Description == "Above Average"]),
+          ifelse(
+            summary_male_rp_force_table$Description == "Below Average",
+            paste(summary_male_rp_force_table$`Min peak_rp_force   `[summary_male_rp_force_table$Description == "Below Average"], 
+                  " - ", 
+                  summary_male_rp_force_table$`Min peak_rp_force   `[summary_male_rp_force_table$Description == "Average"]),
+            ifelse(
+              summary_male_rp_force_table$Description == "Poor",
+              paste(summary_male_rp_force_table$`Min peak_rp_force   `[summary_male_rp_force_table$Description == "Poor"], 
+                    " - ", 
+                    summary_male_rp_force_table$`Min peak_rp_force   `[summary_male_rp_force_table$Description == "Below Average"]),
+              ifelse(
+                summary_male_rp_force_table$Description == "Very Poor",
+                paste(summary_male_rp_force_table$`Min peak_rp_force   `[summary_male_rp_force_table$Description == "Very Poor"], 
+                      " - ", 
+                      summary_male_rp_force_table$`Min peak_rp_force   `[summary_male_rp_force_table$Description == "Poor"]),
+                ifelse(
+                  summary_male_rp_force_table$Description == "Extremely Poor",
+                  paste("< ", summary_male_rp_force_table$`Min peak_rp_force   `[summary_male_rp_force_table$Description == "Very Poor"]),
+                  paste(summary_male_rp_force_table$`Min peak_rp_force   `, " - ", 
+                        summary_male_rp_force_table$`Max peak_rp_force   `)
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)
+
+summary_male_rp_force_table$Description <- factor(summary_male_rp_force_table$Description,
+                                         levels = c(
+                                           "Excellent", "Very Good", "Good", "Above Average", "Average",
+                                           "Below Average", "Poor", "Very Poor", "Extremely Poor"))
+
+summary_male_rp_force_table <- summary_male_rp_force_table %>%
+  select(-`Min peak_rp_force   `, -`Max peak_rp_force   `) %>%
+  kable("html", align = "c") %>%
+  column_spec(1:3, bold = TRUE) %>%
+  row_spec(1:7, bold = TRUE) %>%
+  kable_styling(full_width = TRUE) %>%
+  row_spec(
+    which(summary_male_rp_force_table$Description == "Excellent"),
+    background = "#00AA00"
+  ) %>%
+  row_spec(
+    which(summary_male_rp_force_table$Description == "Very Good"),
+    background = "#00CC00"
+  ) %>%
+  row_spec(
+    which(summary_male_rp_force_table$Description == "Good"),
+    background = "#00EE00"
+  ) %>%
+  row_spec(
+    which(summary_male_rp_force_table$Description == "Above Average"),
+    background = "#99FF99"
+  ) %>%
+  row_spec(
+    which(summary_male_rp_force_table$Description == "Average"),
+    background = "#FFFFFF"
+  ) %>%
+  row_spec(
+    which(summary_male_rp_force_table$Description == "Below Average"),
+    background = "#FFF000"
+  ) %>%
+  row_spec(
+    which(summary_male_rp_force_table$Description == "Poor"),
+    background = "#FF0000"
+  ) %>%
+  row_spec(
+    which(summary_male_rp_force_table$Description == "Very Poor"),
+    background = "#CC0000"
+  ) 
+
+summary_male_rp_force_table
+```
+
+```{r, echo=FALSE, include=FALSE}
+# Save the HTML table to a file
+html_file <- "table_male.html"
+writeLines(as.character(summary_male_rp_force_table), html_file)
+
+# Capture a screenshot of the table
+webshot("table_male.html", "table_male_rp_force.png", vwidth = 500, vheight = 250)
+
+# Cleanup intermediate files
+unlink("table_male.html")
+```
+
+
+
+
+```{r fig.cap= "Figure 1. Interactive plot of normative jump data for female athletes.",message = FALSE, warning = FALSE,fig.width = 10, fig.height = 7}
+p2 <- Df_female_rp_force %>%
+  ggplot(aes(y = peak_rp_force, x = Tscore, fill = Description)) +
+  geom_point(position = position_jitter(width = .25), size = 4, shape = 21, color = "black") +
+  scale_fill_manual(values = c("#006600", "#33CC33", "#00CC00",
+                               "#ccffcc", "#FFFFFF", "#FFCC00",
+                               "#CC3232", "#a32828", "#7a1e1e")) +
+  theme_bw() +
+  labs(title = "Female", y = "Relative Peak Propulsive Power (W/kg)")
+
+ggplotly(p2)
+#ggsave("p2.png")
+```
+
+Notice that we don't have a "very good" due to the zscore and the low sample size, those that section has been silenced (#), this should be improved with a larger sample size. For a larger sample remove the #, and add a closure ")"
+```{r}
+summary_female_rp_force_table <- Df_female_rp_force %>%
+  group_by(Description) %>%
+  summarise(
+    `Number of Athletes` = n(),
+    `Min peak_rp_force` = format(min(peak_rp_force), digits = 2),
+    `Max peak_rp_force` = format(max(peak_rp_force), digits = 2)
+  )
+
+summary_female_rp_force_table$`peak_rp_force Range` <- ifelse(
+  summary_female_rp_force_table$Description == "Excellent",
+  paste("> ", summary_female_rp_force_table$`Min peak_rp_force`[summary_female_rp_force_table$Description == "Excellent"]),
+  ifelse(
+    summary_female_rp_force_table$Description == "Very Good",
+    paste(summary_female_rp_force_table$`Min peak_rp_force`[summary_female_rp_force_table$Description == "Good"],
+          " - ",
+          summary_female_rp_force_table$`Min peak_rp_force`[summary_female_rp_force_table$Description == "Very Good"]
+    ),
+    ifelse(
+      summary_female_rp_force_table$Description == "Good",
+      paste(summary_female_rp_force_table$`Min peak_rp_force`[summary_female_rp_force_table$Description == "Good"], 
+            " - ", 
+            summary_female_rp_force_table$`Min peak_rp_force`[summary_female_rp_force_table$Description == "Excellent"]),
+      ifelse(
+        summary_female_rp_force_table$Description == "Above Average",
+        paste(summary_female_rp_force_table$`Min peak_rp_force`[summary_female_rp_force_table$Description == "Above Average"], 
+              " - ", 
+              summary_female_rp_force_table$`Min peak_rp_force`[summary_female_rp_force_table$Description == "Good"]),
+        ifelse(
+          summary_female_rp_force_table$Description == "Average",
+          paste(summary_female_rp_force_table$`Min peak_rp_force`[summary_female_rp_force_table$Description == "Average"], 
+                " - ", 
+                summary_female_rp_force_table$`Min peak_rp_force`[summary_female_rp_force_table$Description == "Above Average"]),
+          ifelse(
+            summary_female_rp_force_table$Description == "Below Average",
+            paste(summary_female_rp_force_table$`Min peak_rp_force`[summary_female_rp_force_table$Description == "Below Average"], 
+                  " - ", 
+                  summary_female_rp_force_table$`Min peak_rp_force`[summary_female_rp_force_table$Description == "Average"]),
+            ifelse(
+              summary_female_rp_force_table$Description == "Poor",
+              paste(summary_female_rp_force_table$`Min peak_rp_force`[summary_female_rp_force_table$Description == "Poor"], 
+                    " - ", 
+                    summary_female_rp_force_table$`Min peak_rp_force`[summary_female_rp_force_table$Description == "Below Average"]),
+              ifelse(
+                summary_female_rp_force_table$Description == "Very Poor",
+                paste(summary_female_rp_force_table$`Min peak_rp_force`[summary_female_rp_force_table$Description == "Very Poor"], 
+                      " - ", 
+                      summary_female_rp_force_table$`Min peak_rp_force`[summary_female_rp_force_table$Description == "Poor"]),
+                ifelse(
+                  summary_female_rp_force_table$Description == "Extremely Poor",
+                  paste("< ", summary_female_rp_force_table$`Min peak_rp_force`[summary_female_rp_force_table$Description == "Very Poor"]),
+                  paste(summary_female_rp_force_table$`Min peak_rp_force`, " - ", summary_female_rp_force_table$`Max Jump Height (m)`)
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)
+
+summary_female_rp_force_table$Description <- factor(summary_female_rp_force_table$Description,
+                                         levels = c(
+                                           "Excellent", "Very Good", "Good", "Above Average", "Average",
+                                           "Below Average", "Poor", "Very Poor", "Extremely Poor"))
+
+summary_female_rp_force_table <- summary_female_rp_force_table %>%
+  select(-`Min peak_rp_force`, -`Max peak_rp_force`) %>%
+  kable("html", align = "c") %>%
+  column_spec(1:3, bold = TRUE) %>%
+  row_spec(1:7, bold = TRUE) %>%
+  kable_styling(full_width = TRUE) %>%
+  row_spec(
+    which(summary_female_rp_force_table$Description == "Excellent"),
+    background = "#00AA00"
+  ) %>%
+  row_spec(
+    which(summary_female_rp_force_table$Description == "Very Good"),
+    background = "#00CC00"
+  ) %>%
+  row_spec(
+    which(summary_female_rp_force_table$Description == "Good"),
+    background = "#00EE00"
+  ) %>%
+  row_spec(
+    which(summary_female_rp_force_table$Description == "Above Average"),
+    background = "#99FF99"
+  ) %>%
+  row_spec(
+    which(summary_female_rp_force_table$Description == "Average"),
+    background = "#FFFFFF"
+  ) %>%
+  row_spec(
+    which(summary_female_rp_force_table$Description == "Below Average"),
+    background = "#FFF000"
+  ) %>%
+  row_spec(
+    which(summary_female_rp_force_table$Description == "Poor"),
+    background = "#FF0000"
+  ) %>%
+  row_spec(
+    which(summary_female_rp_force_table$Description == "Very Poor"),
+    background = "#CC0000"
+  ) 
+
+summary_female_rp_force_table
+```
+
+
+```{r, echo=FALSE, include=FALSE}
+# Save the HTML table to a file
+html_file <- "table_female.html"
+writeLines(as.character(summary_female_rp_force_table), html_file)
+
+# Capture a screenshot of the table
+webshot("table_female.html", "table_female_rp_force.png", vwidth = 500, vheight = 250)
+
+# Cleanup intermediate files
+unlink("table_female.html")
+```
+
+
+
+```{r,fig.width=10}
+ggarrange(p1,p2)+ theme_prism()
+
+ggsave("normative_rp_Force_bysex.png")
+```
+
+
+
+
+
+```{r}
+Df <- Df %>% mutate(Weight_kg = system_weight / 9.81)
+label(Df$age)   <- "Age (yrs)"
+label(Df$system_weight)   <- "Body weight (kg)"
+label(Df$events)   <- "Empty Hand event"
+label(Df$x7)   <- "Short Weapon event"
+label(Df$x8)   <- "Long Weapon event"
+
+
+table1(~age + Weight_kg + events + x7 + x8| sex, data=Df, render.missing=NULL)
+```
+
+
+
+
+
+
+
+## Zscore Peak propulsive Force
+
+Creation and distribution of the zscore. First need to create two data frames, one for males and one for females.
+
+```{r, echo=FALSE}
+
+Df_sex_rp_braking_force <- Df %>% select(ID,sex,peak_relative_propulsive_power)
+
+#tscore male
+Df_male_rp_braking_force  <- Df_sex_rp_braking_force %>% filter(sex=="Male")
+
+Df_male_rp_braking_force <- Df_male_rp_braking_force %>% 
+  mutate(zscore = (peak_relative_propulsive_power - mean(peak_relative_propulsive_power))/sd(peak_relative_propulsive_power))
+
+t_male_rp_braking_force_plot<- Df_male_rp_braking_force %>% ggplot(aes(zscore)) + geom_density() + theme_prism()+
+  labs(title="Males")
+
+# Tscore female
+Df_female_rp_braking_force <- Df_sex_rp_braking_force %>% filter(sex=="Female")
+
+Df_female_rp_braking_force <- Df_female_rp_braking_force %>% 
+  mutate(zscore = (peak_relative_propulsive_power - mean(peak_relative_propulsive_power))/
+           sd(peak_relative_propulsive_power))
+
+t_female_rp_braking_force_plot <- Df_female_rp_braking_force %>% ggplot(aes(zscore)) + geom_density() + theme_prism() + labs(title="Females")
+
+
+#plot together
+ggarrange(t_male_rp_braking_force_plot,t_female_rp_braking_force_plot, ncol = 1)
+```
+
+
+```{r}
+Df_male_rp_braking_force <- Df_male_rp_braking_force%>% mutate(Tscore =  zscore*10+50)
+Df_female_rp_braking_force <- Df_female_rp_braking_force%>% mutate(Tscore =  zscore*10+50)
+
+
+Df_male_rp_braking_force <- Df_male_rp_braking_force %>% mutate(Description = 
+                            case_when(Tscore > 80 ~ 'Excellent',
+                                    Tscore <= 80 & Tscore > 70  ~ 'Very Good',
+                                    Tscore <= 70 & Tscore > 60  ~ 'Good',
+                                    Tscore <= 60 & Tscore > 50  ~ 'Above Average',
+                                    Tscore <= 50 & Tscore > 45  ~ 'Average',
+                                    Tscore <= 45 & Tscore > 40  ~ 'Below Average',
+                                    Tscore <= 40 & Tscore > 30  ~ 'Poor',
+                                    Tscore <= 30 & Tscore > 20  ~ 'Very Poor',
+                                    Tscore <= 20  ~ 'Extremely Poor')) 
+
+Df_male_rp_braking_force$Description <- factor(Df_male_rp_braking_force$Description,
+                             levels = c("Excellent", "Very Good", "Good", 
+                                        "Above Average", "Average",
+                                        "Below Average","Poor", 
+                                        "Very Poor", "Extremely Poor"),
+                             ordered = TRUE)
+
+Df_female_rp_braking_force <- Df_female_rp_braking_force %>% mutate(Description = 
+                            case_when(Tscore > 80 ~ 'Excellent',
+                                    Tscore <= 80 & Tscore > 70  ~ 'Very Good',
+                                    Tscore <= 70 & Tscore > 60  ~ 'Good',
+                                    Tscore <= 60 & Tscore > 50  ~ 'Above Average',
+                                    Tscore <= 50 & Tscore > 45  ~ 'Average',
+                                    Tscore <= 45 & Tscore > 40  ~ 'Below Average',
+                                    Tscore <= 40 & Tscore > 30  ~ 'Poor',
+                                    Tscore <= 30 & Tscore > 20  ~ 'Very Poor',
+                                    Tscore <= 20  ~ 'Extremely Poor')) 
+
+Df_female_rp_braking_force$Description <- factor(Df_female_rp_braking_force$Description,
+                             levels = c("Excellent", "Very Good", "Good", 
+                                        "Above Average", "Average",
+                                        "Below Average","Poor", 
+                                        "Very Poor", "Extremely Poor"),
+                             ordered = TRUE)
+```
+
+##Interactive Plots
+
+
+```{r fig.cap= "Figure 1. Interactive plot of normative jump data for male athletes.",message = FALSE, warning = FALSE,fig.width = 10, fig.height = 7}
+p1 <- Df_male_rp_braking_force %>%
+  ggplot(aes(y = peak_relative_propulsive_power, x = Tscore, fill = Description)) +
+  geom_point(position = position_jitter(width = .25), size = 4, shape = 21, color = "black") +
+  scale_fill_manual(values = c("#006600", "#33CC33", "#00CC00",
+                               "#ccffcc", "#FFFFFF", "#FFCC00",
+                               "#CC3232", "#a32828", "#7a1e1e")) +
+  theme_bw() +
+  labs(title = "Male", y = "Relative Peak Propulsive Power (W/kg)")
+
+ggplotly(p1)
+#ggsave("p1.png")
+```
+
+
+```{r}
+#Replace 'Min Jump Height' and "max Jump Height' for variable of interest
+summary_male_rp_braking_force_table <- Df_male_rp_braking_force %>%
+  group_by(Description) %>%
+  summarise(
+    `Number of Athletes` = n(),
+    `Min peak_relative_propulsive_power` = format(min(peak_relative_propulsive_power), digits = 2),
+    `Max peak_relative_propulsive_power` = format(max(peak_relative_propulsive_power), digits = 2))
+
+summary_male_rp_braking_force_table$`peak_relative_propulsive_power Range` <- ifelse(
+  summary_male_rp_braking_force_table$Description == "Excellent",
+  paste("> ", summary_male_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_male_rp_braking_force_table$Description == "Excellent"]),
+  ifelse(
+    summary_male_rp_braking_force_table$Description == "Very Good",
+    paste(summary_male_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_male_rp_braking_force_table$Description == "Good"],
+          " - ",
+          summary_male_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_male_rp_braking_force_table$Description == "Very Good"]
+    ),
+    ifelse(
+      summary_male_rp_braking_force_table$Description == "Good",
+      paste(summary_male_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_male_rp_braking_force_table$Description == "Good"], 
+            " - ", 
+            summary_male_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_male_rp_braking_force_table$Description == "Excellent"]),
+      ifelse(
+        summary_male_rp_braking_force_table$Description == "Above Average",
+        paste(summary_male_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_male_rp_braking_force_table$Description == "Above Average"], 
+              " - ", 
+              summary_male_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_male_rp_braking_force_table$Description == "Good"]),
+        ifelse(
+          summary_male_rp_braking_force_table$Description == "Average",
+          paste(summary_male_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_male_rp_braking_force_table$Description == "Average"], 
+                " - ", 
+                summary_male_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_male_rp_braking_force_table$Description == "Above Average"]),
+          ifelse(
+            summary_male_rp_braking_force_table$Description == "Below Average",
+            paste(summary_male_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_male_rp_braking_force_table$Description == "Below Average"], 
+                  " - ", 
+                  summary_male_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_male_rp_braking_force_table$Description == "Average"]),
+            ifelse(
+              summary_male_rp_braking_force_table$Description == "Poor",
+              paste(summary_male_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_male_rp_braking_force_table$Description == "Poor"], 
+                    " - ", 
+                    summary_male_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_male_rp_braking_force_table$Description == "Below Average"]),
+              ifelse(
+                summary_male_rp_braking_force_table$Description == "Very Poor",
+                paste(summary_male_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_male_rp_braking_force_table$Description == "Very Poor"], 
+                      " - ", 
+                      summary_male_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_male_rp_braking_force_table$Description == "Poor"]),
+                ifelse(
+                  summary_male_rp_braking_force_table$Description == "Extremely Poor",
+                  paste("< ", summary_male_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_male_rp_braking_force_table$Description == "Very Poor"]),
+                  paste(summary_male_rp_braking_force_table$`Min peak_relative_propulsive_power`, " - ", summary_male_rp_braking_force_table$`Max Jump Height (m)`)
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)
+
+summary_male_rp_braking_force_table$Description <- factor(summary_male_rp_braking_force_table$Description,
+                                         levels = c(
+                                           "Excellent", "Very Good", "Good", "Above Average", "Average",
+                                           "Below Average", "Poor", "Very Poor", "Extremely Poor"))
+
+summary_male_rp_braking_force_table <- summary_male_rp_braking_force_table %>%
+  select(-`Min peak_relative_propulsive_power`, -`Max peak_relative_propulsive_power`) %>%
+  kable("html", align = "c") %>%
+  column_spec(1:3, bold = TRUE) %>%
+  row_spec(1:7, bold = TRUE) %>%
+  kable_styling(full_width = TRUE) %>%
+  row_spec(
+    which(summary_male_rp_braking_force_table$Description == "Excellent"),
+    background = "#00AA00"
+  ) %>%
+  row_spec(
+    which(summary_male_rp_braking_force_table$Description == "Very Good"),
+    background = "#00CC00"
+  ) %>%
+  row_spec(
+    which(summary_male_rp_braking_force_table$Description == "Good"),
+    background = "#00EE00"
+  ) %>%
+  row_spec(
+    which(summary_male_rp_braking_force_table$Description == "Above Average"),
+    background = "#99FF99"
+  ) %>%
+  row_spec(
+    which(summary_male_rp_braking_force_table$Description == "Average"),
+    background = "#FFFFFF"
+  ) %>%
+  row_spec(
+    which(summary_male_rp_braking_force_table$Description == "Below Average"),
+    background = "#FFF000"
+  ) %>%
+  row_spec(
+    which(summary_male_rp_braking_force_table$Description == "Poor"),
+    background = "#FF0000"
+  ) %>%
+  row_spec(
+    which(summary_male_rp_braking_force_table$Description == "Very Poor"),
+    background = "#CC0000"
+  ) 
+
+summary_male_rp_braking_force_table
+```
+
+```{r, echo=FALSE, include=FALSE}
+# Save the HTML table to a file
+html_file <- "table_male.html"
+writeLines(as.character(summary_male_rp_braking_force_table), html_file)
+
+# Capture a screenshot of the table
+webshot("table_male.html", "table_male_braking_force.png", vwidth = 500, vheight = 250)
+
+# Cleanup intermediate files
+unlink("table_male.html")
+```
+
+
+
+
+```{r fig.cap= "Figure 1. Interactive plot of normative jump data for female athletes.",message = FALSE, warning = FALSE,fig.width = 10, fig.height = 7}
+p2 <- Df_female_rp_braking_force %>%
+  ggplot(aes(y = peak_relative_propulsive_power, x = Tscore, fill = Description)) +
+  geom_point(position = position_jitter(width = .25), size = 4, shape = 21, color = "black") +
+  scale_fill_manual(values = c("#006600", "#33CC33", "#00CC00",
+                               "#ccffcc", "#FFFFFF", "#FFCC00",
+                               "#CC3232", "#a32828", "#7a1e1e")) +
+  theme_bw() +
+  labs(title = "Female", y = "Relative Peak Propulsive Power (W/kg)")
+
+ggplotly(p2)
+#ggsave("p2.png")
+```
+
+Notice that we don't have a "very good" due to the zscore and the low sample size, those that section has been silenced (#), this should be improved with a larger sample size. For a larger sample remove the #, and add a closure ")"
+```{r}
+summary_female_rp_braking_force_table <- Df_female_rp_braking_force %>%
+  group_by(Description) %>%
+  summarise(
+    `Number of Athletes` = n(),
+    `Min peak_relative_propulsive_power` = format(min(peak_relative_propulsive_power), digits = 2),
+    `Max peak_relative_propulsive_power` = format(max(peak_relative_propulsive_power), digits = 2)
+  )
+
+summary_female_rp_braking_force_table$`peak_relative_propulsive_power Range` <- ifelse(
+  summary_female_rp_braking_force_table$Description == "Excellent",
+  paste("> ", summary_female_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_female_rp_braking_force_table$Description == "Excellent"]),
+  ifelse(
+    summary_female_rp_braking_force_table$Description == "Very Good",
+    paste(summary_female_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_female_rp_braking_force_table$Description == "Good"],
+          " - ",
+          summary_female_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_female_rp_braking_force_table$Description == "Very Good"]
+    ),
+    ifelse(
+      summary_female_rp_braking_force_table$Description == "Good",
+      paste(summary_female_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_female_rp_braking_force_table$Description == "Good"], 
+            " - ", 
+            summary_female_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_female_rp_braking_force_table$Description == "Excellent"]),
+      ifelse(
+        summary_female_rp_braking_force_table$Description == "Above Average",
+        paste(summary_female_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_female_rp_braking_force_table$Description == "Above Average"], 
+              " - ", 
+              summary_female_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_female_rp_braking_force_table$Description == "Good"]),
+        ifelse(
+          summary_female_rp_braking_force_table$Description == "Average",
+          paste(summary_female_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_female_rp_braking_force_table$Description == "Average"], 
+                " - ", 
+                summary_female_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_female_rp_braking_force_table$Description == "Above Average"]),
+          ifelse(
+            summary_female_rp_braking_force_table$Description == "Below Average",
+            paste(summary_female_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_female_rp_braking_force_table$Description == "Below Average"], 
+                  " - ", 
+                  summary_female_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_female_rp_braking_force_table$Description == "Average"]),
+            ifelse(
+              summary_female_rp_braking_force_table$Description == "Poor",
+              paste(summary_female_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_female_rp_braking_force_table$Description == "Poor"], 
+                    " - ", 
+                    summary_female_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_female_rp_braking_force_table$Description == "Below Average"]),
+              ifelse(
+                summary_female_rp_braking_force_table$Description == "Very Poor",
+                paste(summary_female_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_female_rp_braking_force_table$Description == "Very Poor"], 
+                      " - ", 
+                      summary_female_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_female_rp_braking_force_table$Description == "Poor"]),
+                ifelse(
+                  summary_female_rp_braking_force_table$Description == "Extremely Poor",
+                  paste("< ", summary_female_rp_braking_force_table$`Min peak_relative_propulsive_power`[summary_female_rp_braking_force_table$Description == "Very Poor"]),
+                  paste(summary_female_rp_braking_force_table$`Min peak_relative_propulsive_power`, " - ", summary_female_rp_braking_force_table$`Max Jump Height (m)`)
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+)
+
+summary_female_rp_braking_force_table$Description <- factor(summary_female_rp_braking_force_table$Description,
+                                         levels = c(
+                                           "Excellent", "Very Good", "Good", "Above Average", "Average",
+                                           "Below Average", "Poor", "Very Poor", "Extremely Poor"))
+
+summary_female_rp_braking_force_table <- summary_female_rp_braking_force_table %>%
+  select(-`Min peak_relative_propulsive_power`, -`Max peak_relative_propulsive_power`) %>%
+  kable("html", align = "c") %>%
+  column_spec(1:3, bold = TRUE) %>%
+  row_spec(1:7, bold = TRUE) %>%
+  kable_styling(full_width = TRUE) %>%
+  row_spec(
+    which(summary_female_rp_braking_force_table$Description == "Excellent"),
+    background = "#00AA00"
+  ) %>%
+  row_spec(
+    which(summary_female_rp_braking_force_table$Description == "Very Good"),
+    background = "#00CC00"
+  ) %>%
+  row_spec(
+    which(summary_female_rp_braking_force_table$Description == "Good"),
+    background = "#00EE00"
+  ) %>%
+  row_spec(
+    which(summary_female_rp_braking_force_table$Description == "Above Average"),
+    background = "#99FF99"
+  ) %>%
+  row_spec(
+    which(summary_female_rp_braking_force_table$Description == "Average"),
+    background = "#FFFFFF"
+  ) %>%
+  row_spec(
+    which(summary_female_rp_braking_force_table$Description == "Below Average"),
+    background = "#FFF000"
+  ) %>%
+  row_spec(
+    which(summary_female_rp_braking_force_table$Description == "Poor"),
+    background = "#FF0000"
+  ) %>%
+  row_spec(
+    which(summary_female_rp_braking_force_table$Description == "Very Poor"),
+    background = "#CC0000"
+  ) 
+
+summary_female_rp_braking_force_table
+```
+
+
+```{r, echo=FALSE, include=FALSE}
+# Save the HTML table to a file
+html_file <- "table_female.html"
+writeLines(as.character(summary_female_rp_braking_force_table), html_file)
+
+# Capture a screenshot of the table
+webshot("table_female.html", "table_female_braking_force.png", vwidth = 500, vheight = 250)
+
+# Cleanup intermediate files
+unlink("table_female.html")
+```
+
+
+
+```{r,fig.width=10}
+ggarrange(p1,p2)+ theme_prism()
+
+ggsave("normative_peak_bForce_bysex.png")
+```
+
+
+
+
+```{r}
+model <- lm(jump_height ~ events * sex + age, data = Df)
+anova(model)
+```
+
+
+
+```{r}
+table1(~jump_height + jump_momentum + 
+         m_rsi + stiffness + peak_rp_force | sex, data=Df )
+```
+``
+
+
+```{r}
+library(gtsummary)
+library(dplyr)
+library(gt)
+
+# Create a focused dataset with just the variables of interest
+jump_vars_df <- Df %>%
+  select(
+    sex,
+    `Jump Height (m)` = jump_height,
+    `mRSI` = m_rsi,
+    `Rel. Net Impulse (Ns/kg)` = relative_propulsive_net_impulse,
+    `Rel. Peak Propulsive Power (W/kg)` = peak_relative_propulsive_power,
+    `Rel. Peak Propulsive Force (N/kg)` = peak_relative_propulsive_force
+  )
+
+# Create the summary table with statistical comparison by sex
+jump_summary_table <- jump_vars_df %>%
+  tbl_summary(
+    by = sex,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})"
+    ),
+    digits = all_continuous() ~ 2,
+    missing = "no"  # Don't show missing data
+  ) %>%
+  add_p(  # Add p-values comparing differences between sex
+    test = all_continuous() ~ "t.test",
+    pvalue_fun = ~ style_pvalue(.x, digits = 3)
+  ) %>%
+  add_n() %>%  # Add sample size
+  modify_header(label = "**Variable**") %>%  # Bold header
+  modify_spanning_header(all_stat_cols() ~ "**Sex**") %>%
+  bold_labels() %>%
+  italicize_levels()
+
+# Display the table
+jump_summary_table
+
+# Save as HTML using gtsummary's own saving function
+gtsummary::as_gt(jump_summary_table) %>%
+  gt::gtsave("jump_summary_by_sex.html")
+
+# Save as an image 
+gtsummary::as_gt(jump_summary_table) %>%
+  gt::gtsave("jump_summary_by_sex.png")
+```
+
