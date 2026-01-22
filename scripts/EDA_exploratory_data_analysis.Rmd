@@ -1,0 +1,796 @@
+---
+title: "Exploratory Data Analysis: SUKMA Wushu Jump Performance"
+author: "Samuel Montalvo, Ph.D."
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    code_folding: show
+    theme: flatly
+    highlight: tango
+    fig_width: 10
+    fig_height: 6
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  cache = FALSE
+)
+```
+
+# 1. Introduction
+
+This exploratory data analysis examines vertical jump performance data from Malaysian Wushu athletes competing in SUKMA (Southeast Asian Games). The analysis focuses on understanding data distributions, relationships between variables, and performance differences across demographic groups.
+
+**Research Questions:**
+
+1. What is the distribution of jump performance metrics?
+2. Are there significant differences between male and female athletes?
+3. How do performance metrics correlate with each other?
+4. What is the prevalence of inter-limb asymmetries?
+5. Are there outliers or unusual patterns in the data?
+
+---
+
+# 2. Load Libraries
+
+```{r libraries}
+# Data manipulation
+library(readr)
+library(dplyr)
+library(tidyr)
+library(janitor)
+
+# Visualization
+library(ggplot2)
+library(ggpubr)
+library(ggprism)
+library(ggridges)
+library(plotly)
+library(ggcorrplot)
+library(corrplot)
+
+# Tables
+library(kableExtra)
+library(flextable)
+library(table1)
+
+# Statistical tools
+library(psych)
+library(skimr)
+library(GGally)
+library(factoextra)
+```
+
+---
+
+# 3. Load and Prepare Data
+
+```{r load-data}
+# Load the processed dataset
+df <- read_csv("../data/SUKMA_Wushu_Data.csv") %>%
+  clean_names()
+
+# Display data dimensions
+cat("Dataset dimensions:", nrow(df), "rows x", ncol(df), "columns\n")
+```
+
+```{r data-structure}
+# Display first few rows
+head(df, 10) %>%
+  kable(caption = "First 10 rows of the dataset") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  scroll_box(width = "100%", height = "400px")
+```
+
+---
+
+# 4. Data Structure Overview
+
+## 4.1 Variable Types
+
+```{r variable-types}
+# Summarize variable types
+df %>%
+  summarise(
+    Total_Variables = ncol(.),
+    Numeric_Variables = sum(sapply(., is.numeric)),
+    Character_Variables = sum(sapply(., is.character)),
+    Factor_Variables = sum(sapply(., is.factor))
+  ) %>%
+  kable(caption = "Variable Type Summary") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## 4.2 Data Summary
+
+```{r data-summary}
+# Use skimr for comprehensive summary
+skim(df) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  scroll_box(width = "100%", height = "600px")
+```
+
+---
+
+# 5. Sample Characteristics
+
+## 5.1 Demographics by Sex
+
+```{r demographics-sex}
+df %>%
+  group_by(sex) %>%
+  summarise(
+    N = n(),
+    Mean_Age = round(mean(age, na.rm = TRUE), 1),
+    SD_Age = round(sd(age, na.rm = TRUE), 1),
+    Min_Age = min(age, na.rm = TRUE),
+    Max_Age = max(age, na.rm = TRUE),
+    Mean_Weight = round(mean(system_weight, na.rm = TRUE), 1),
+    SD_Weight = round(sd(system_weight, na.rm = TRUE), 1)
+  ) %>%
+  kable(caption = "Demographics by Sex") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## 5.2 Sample Distribution by Event
+
+```{r sample-by-event}
+df %>%
+  count(events, sex) %>%
+  pivot_wider(names_from = sex, values_from = n, values_fill = 0) %>%
+  mutate(Total = Male + Female) %>%
+  kable(caption = "Sample Size by Event and Sex") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## 5.3 Sample Distribution by Region
+
+```{r sample-by-region}
+df %>%
+  count(region, sex) %>%
+  pivot_wider(names_from = sex, values_from = n, values_fill = 0) %>%
+  arrange(desc(Male + Female)) %>%
+  mutate(Total = Male + Female) %>%
+  kable(caption = "Sample Size by Region and Sex") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+## 5.4 Visual: Sample Distribution
+
+```{r sample-distribution-plot, fig.height=8}
+# By sex
+p1 <- df %>%
+  ggplot(aes(x = sex, fill = sex)) +
+  geom_bar(stat = "count", alpha = 0.8) +
+  geom_text(stat = "count", aes(label = after_stat(count)), vjust = -0.5) +
+  scale_fill_manual(values = c("Male" = "#0073C2FF", "Female" = "#EFC000FF")) +
+  theme_prism() +
+  labs(title = "Sample Distribution by Sex", x = "Sex", y = "Count") +
+  theme(legend.position = "none")
+
+# By event
+p2 <- df %>%
+  ggplot(aes(x = events, fill = sex)) +
+  geom_bar(position = "dodge", alpha = 0.8) +
+  scale_fill_manual(values = c("Male" = "#0073C2FF", "Female" = "#EFC000FF")) +
+  theme_prism() +
+  labs(title = "Sample Distribution by Event and Sex", x = "Event", y = "Count") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# By region
+p3 <- df %>%
+  count(region) %>%
+  arrange(desc(n)) %>%
+  ggplot(aes(x = reorder(region, n), y = n)) +
+  geom_col(fill = "#00A087FF", alpha = 0.8) +
+  geom_text(aes(label = n), hjust = -0.3) +
+  coord_flip() +
+  theme_prism() +
+  labs(title = "Sample Distribution by Region", x = "Region", y = "Count")
+
+ggarrange(p1, p2, p3, ncol = 1, nrow = 3, heights = c(1, 1, 1.5))
+```
+
+---
+
+# 6. Missing Data Analysis
+
+```{r missing-data}
+# Calculate missing data percentages
+missing_summary <- df %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "Missing_Count") %>%
+  mutate(
+    Missing_Percent = round((Missing_Count / nrow(df)) * 100, 2)
+  ) %>%
+  filter(Missing_Count > 0) %>%
+  arrange(desc(Missing_Count))
+
+if(nrow(missing_summary) > 0) {
+  missing_summary %>%
+    kable(caption = "Variables with Missing Data") %>%
+    kable_styling(bootstrap_options = c("striped", "hover"))
+} else {
+  cat("No missing data detected in the dataset.\n")
+}
+```
+
+```{r missing-plot}
+if(nrow(missing_summary) > 0) {
+  missing_summary %>%
+    ggplot(aes(x = reorder(Variable, Missing_Percent), y = Missing_Percent)) +
+    geom_col(fill = "#DC0000FF", alpha = 0.7) +
+    coord_flip() +
+    theme_prism() +
+    labs(
+      title = "Missing Data by Variable",
+      x = "Variable",
+      y = "Missing Data (%)"
+    )
+}
+```
+
+---
+
+# 7. Key Performance Metrics Analysis
+
+## 7.1 Jump Height Distribution
+
+```{r jump-height-overall}
+# Summary statistics
+df %>%
+  summarise(
+    N = n(),
+    Mean = round(mean(jump_height, na.rm = TRUE), 3),
+    SD = round(sd(jump_height, na.rm = TRUE), 3),
+    Min = round(min(jump_height, na.rm = TRUE), 3),
+    Q1 = round(quantile(jump_height, 0.25, na.rm = TRUE), 3),
+    Median = round(median(jump_height, na.rm = TRUE), 3),
+    Q3 = round(quantile(jump_height, 0.75, na.rm = TRUE), 3),
+    Max = round(max(jump_height, na.rm = TRUE), 3)
+  ) %>%
+  kable(caption = "Jump Height Summary Statistics (m)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+```{r jump-height-by-sex}
+# By sex
+df %>%
+  group_by(sex) %>%
+  summarise(
+    N = n(),
+    Mean = round(mean(jump_height, na.rm = TRUE), 3),
+    SD = round(sd(jump_height, na.rm = TRUE), 3),
+    Min = round(min(jump_height, na.rm = TRUE), 3),
+    Median = round(median(jump_height, na.rm = TRUE), 3),
+    Max = round(max(jump_height, na.rm = TRUE), 3)
+  ) %>%
+  kable(caption = "Jump Height by Sex (m)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+```{r jump-height-plots, fig.height=10}
+# Histogram
+p1 <- df %>%
+  ggplot(aes(x = jump_height, fill = sex)) +
+  geom_histogram(bins = 30, alpha = 0.6, position = "identity") +
+  scale_fill_manual(values = c("Male" = "#0073C2FF", "Female" = "#EFC000FF")) +
+  theme_prism() +
+  labs(title = "Jump Height Distribution", x = "Jump Height (m)", y = "Frequency")
+
+# Density plot
+p2 <- df %>%
+  ggplot(aes(x = jump_height, fill = sex)) +
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(values = c("Male" = "#0073C2FF", "Female" = "#EFC000FF")) +
+  theme_prism() +
+  labs(title = "Jump Height Density by Sex", x = "Jump Height (m)", y = "Density")
+
+# Boxplot
+p3 <- df %>%
+  ggplot(aes(x = sex, y = jump_height, fill = sex)) +
+  geom_boxplot(alpha = 0.7, outlier.colour = "red") +
+  geom_jitter(width = 0.2, alpha = 0.3, size = 2) +
+  scale_fill_manual(values = c("Male" = "#0073C2FF", "Female" = "#EFC000FF")) +
+  theme_prism() +
+  labs(title = "Jump Height by Sex", x = "Sex", y = "Jump Height (m)") +
+  theme(legend.position = "none")
+
+# Violin plot
+p4 <- df %>%
+  ggplot(aes(x = sex, y = jump_height, fill = sex)) +
+  geom_violin(alpha = 0.6) +
+  geom_boxplot(width = 0.1, fill = "white", alpha = 0.8) +
+  scale_fill_manual(values = c("Male" = "#0073C2FF", "Female" = "#EFC000FF")) +
+  theme_prism() +
+  labs(title = "Jump Height Violin Plot", x = "Sex", y = "Jump Height (m)") +
+  theme(legend.position = "none")
+
+ggarrange(p1, p2, p3, p4, ncol = 2, nrow = 2)
+```
+
+## 7.2 Peak Propulsive Force
+
+```{r peak-force-analysis}
+# Summary by sex
+df %>%
+  group_by(sex) %>%
+  summarise(
+    N = n(),
+    Mean_Absolute = round(mean(peak_propulsive_force, na.rm = TRUE), 1),
+    SD_Absolute = round(sd(peak_propulsive_force, na.rm = TRUE), 1),
+    Mean_Relative = round(mean(peak_relative_propulsive_force, na.rm = TRUE), 2),
+    SD_Relative = round(sd(peak_relative_propulsive_force, na.rm = TRUE), 2)
+  ) %>%
+  kable(caption = "Peak Propulsive Force by Sex") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+```{r peak-force-plots, fig.height=6}
+# Absolute force
+p1 <- df %>%
+  ggplot(aes(x = sex, y = peak_propulsive_force, fill = sex)) +
+  geom_violin(alpha = 0.6) +
+  geom_boxplot(width = 0.1, fill = "white", alpha = 0.8) +
+  scale_fill_manual(values = c("Male" = "#0073C2FF", "Female" = "#EFC000FF")) +
+  theme_prism() +
+  labs(title = "Peak Propulsive Force (Absolute)", x = "Sex", y = "Force (N)") +
+  theme(legend.position = "none")
+
+# Relative force
+p2 <- df %>%
+  ggplot(aes(x = sex, y = peak_relative_propulsive_force, fill = sex)) +
+  geom_violin(alpha = 0.6) +
+  geom_boxplot(width = 0.1, fill = "white", alpha = 0.8) +
+  scale_fill_manual(values = c("Male" = "#0073C2FF", "Female" = "#EFC000FF")) +
+  theme_prism() +
+  labs(title = "Peak Propulsive Force (Relative)", x = "Sex", y = "Force (N/kg)") +
+  theme(legend.position = "none")
+
+ggarrange(p1, p2, ncol = 2)
+```
+
+## 7.3 Modified Reactive Strength Index (mRSI)
+
+```{r mrsi-analysis}
+# Summary by sex
+df %>%
+  group_by(sex) %>%
+  summarise(
+    N = n(),
+    Mean = round(mean(m_rsi, na.rm = TRUE), 3),
+    SD = round(sd(m_rsi, na.rm = TRUE), 3),
+    Min = round(min(m_rsi, na.rm = TRUE), 3),
+    Median = round(median(m_rsi, na.rm = TRUE), 3),
+    Max = round(max(m_rsi, na.rm = TRUE), 3)
+  ) %>%
+  kable(caption = "Modified Reactive Strength Index (mRSI) by Sex") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+```{r mrsi-plot}
+df %>%
+  ggplot(aes(x = sex, y = m_rsi, fill = sex)) +
+  geom_violin(alpha = 0.6) +
+  geom_boxplot(width = 0.1, fill = "white", alpha = 0.8) +
+  geom_jitter(width = 0.2, alpha = 0.3, size = 2) +
+  scale_fill_manual(values = c("Male" = "#0073C2FF", "Female" = "#EFC000FF")) +
+  theme_prism() +
+  labs(title = "Modified Reactive Strength Index by Sex", x = "Sex", y = "mRSI") +
+  theme(legend.position = "none")
+```
+
+---
+
+# 8. Inter-limb Asymmetry Analysis
+
+## 8.1 Peak Propulsive Force Asymmetry
+
+```{r asymmetry-propulsive}
+# Summary statistics
+df %>%
+  summarise(
+    Mean_Asymmetry = round(mean(l_r_peak_propulsive_force, na.rm = TRUE), 2),
+    SD_Asymmetry = round(sd(l_r_peak_propulsive_force, na.rm = TRUE), 2),
+    Min = round(min(l_r_peak_propulsive_force, na.rm = TRUE), 2),
+    Median = round(median(l_r_peak_propulsive_force, na.rm = TRUE), 2),
+    Max = round(max(l_r_peak_propulsive_force, na.rm = TRUE), 2)
+  ) %>%
+  kable(caption = "Peak Propulsive Force Asymmetry (L-R %)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+```{r asymmetry-distribution}
+df %>%
+  ggplot(aes(x = l_r_peak_propulsive_force)) +
+  geom_histogram(bins = 40, fill = "#4DBBD5FF", alpha = 0.7) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red", size = 1) +
+  theme_prism() +
+  labs(
+    title = "Distribution of Peak Propulsive Force Asymmetry",
+    x = "L-R Asymmetry (%)",
+    y = "Frequency"
+  )
+```
+
+## 8.2 Asymmetry Categories
+
+```{r asymmetry-categories}
+# Create asymmetry categories
+df_asym <- df %>%
+  mutate(
+    asym_magnitude = abs(l_r_peak_propulsive_force),
+    asym_category = case_when(
+      asym_magnitude < 10 ~ "Low (<10%)",
+      asym_magnitude < 15 ~ "Moderate (10-15%)",
+      asym_magnitude >= 15 ~ "High (≥15%)"
+    ),
+    asym_category = factor(asym_category, levels = c("Low (<10%)", "Moderate (10-15%)", "High (≥15%)"))
+  )
+
+# Summary table
+df_asym %>%
+  count(asym_category) %>%
+  mutate(Percent = round((n / sum(n)) * 100, 1)) %>%
+  kable(caption = "Asymmetry Category Distribution") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+```{r asymmetry-by-sex}
+# By sex
+df_asym %>%
+  count(sex, asym_category) %>%
+  group_by(sex) %>%
+  mutate(Percent = round((n / sum(n)) * 100, 1)) %>%
+  kable(caption = "Asymmetry Categories by Sex") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+```{r asymmetry-plot}
+df_asym %>%
+  ggplot(aes(x = asym_category, fill = sex)) +
+  geom_bar(position = "dodge", alpha = 0.7) +
+  scale_fill_manual(values = c("Male" = "#0073C2FF", "Female" = "#EFC000FF")) +
+  theme_prism() +
+  labs(
+    title = "Asymmetry Category Distribution by Sex",
+    x = "Asymmetry Category",
+    y = "Count",
+    fill = "Sex"
+  )
+```
+
+---
+
+# 9. Correlation Analysis
+
+## 9.1 Key Performance Metrics Correlation
+
+```{r correlation-select}
+# Select key performance variables
+key_vars <- df %>%
+  select(
+    jump_height,
+    peak_propulsive_force,
+    peak_relative_propulsive_force,
+    peak_braking_force,
+    m_rsi,
+    propulsive_net_impulse,
+    time_to_takeoff,
+    countermovement_depth,
+    system_weight,
+    age
+  ) %>%
+  drop_na()
+
+# Calculate correlation matrix
+cor_matrix <- cor(key_vars, use = "complete.obs")
+
+# Display correlation matrix
+cor_matrix %>%
+  round(2) %>%
+  kable(caption = "Correlation Matrix - Key Performance Metrics") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  scroll_box(width = "100%")
+```
+
+```{r correlation-heatmap, fig.height=8, fig.width=10}
+# Correlation heatmap
+ggcorrplot(
+  cor_matrix,
+  type = "lower",
+  lab = TRUE,
+  lab_size = 3,
+  colors = c("#6D9EC1", "white", "#E46726"),
+  title = "Correlation Heatmap - Key Performance Metrics",
+  ggtheme = theme_prism()
+)
+```
+
+## 9.2 Jump Height Correlations
+
+```{r jump-height-correlations}
+# Correlations with jump height
+cor_with_height <- cor_matrix[, "jump_height"] %>%
+  as.data.frame() %>%
+  rename(Correlation = ".") %>%
+  arrange(desc(abs(Correlation))) %>%
+  slice(2:11)  # Exclude jump_height itself
+
+cor_with_height %>%
+  mutate(Correlation = round(Correlation, 3)) %>%
+  kable(caption = "Top 10 Correlations with Jump Height") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+```{r correlation-plot}
+cor_with_height %>%
+  tibble::rownames_to_column("Variable") %>%
+  ggplot(aes(x = reorder(Variable, Correlation), y = Correlation)) +
+  geom_col(aes(fill = Correlation > 0), alpha = 0.8) +
+  scale_fill_manual(values = c("TRUE" = "#00A087FF", "FALSE" = "#DC0000FF")) +
+  coord_flip() +
+  theme_prism() +
+  labs(
+    title = "Correlations with Jump Height",
+    x = "Variable",
+    y = "Pearson Correlation"
+  ) +
+  theme(legend.position = "none")
+```
+
+## 9.3 Scatter Plot Matrix
+
+```{r scatterplot-matrix, fig.height=10, fig.width=12}
+# Select top correlated variables with jump height
+top_vars <- df %>%
+  select(jump_height, peak_propulsive_force, peak_relative_propulsive_force,
+         m_rsi, propulsive_net_impulse, sex) %>%
+  drop_na()
+
+# Create pairs plot
+ggpairs(
+  top_vars,
+  aes(color = sex, alpha = 0.5),
+  lower = list(continuous = wrap("points", size = 1)),
+  upper = list(continuous = wrap("cor", size = 3)),
+  title = "Scatter Plot Matrix - Key Performance Variables"
+) +
+  scale_color_manual(values = c("Male" = "#0073C2FF", "Female" = "#EFC000FF")) +
+  scale_fill_manual(values = c("Male" = "#0073C2FF", "Female" = "#EFC000FF")) +
+  theme_bw()
+```
+
+---
+
+# 10. Performance by Event
+
+```{r performance-by-event}
+# Jump height by event
+df %>%
+  group_by(events, sex) %>%
+  summarise(
+    N = n(),
+    Mean_Height = round(mean(jump_height, na.rm = TRUE), 3),
+    SD_Height = round(sd(jump_height, na.rm = TRUE), 3),
+    .groups = "drop"
+  ) %>%
+  kable(caption = "Jump Height by Event and Sex") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+```{r event-comparison-plot, fig.height=8}
+df %>%
+  ggplot(aes(x = events, y = jump_height, fill = sex)) +
+  geom_violin(alpha = 0.6) +
+  geom_boxplot(width = 0.2, position = position_dodge(0.9), alpha = 0.8) +
+  scale_fill_manual(values = c("Male" = "#0073C2FF", "Female" = "#EFC000FF")) +
+  theme_prism() +
+  labs(
+    title = "Jump Height Distribution by Event and Sex",
+    x = "Event",
+    y = "Jump Height (m)",
+    fill = "Sex"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+---
+
+# 11. Outlier Detection
+
+## 11.1 Jump Height Outliers
+
+```{r outliers-jump-height}
+# Calculate outliers using IQR method
+Q1 <- quantile(df$jump_height, 0.25, na.rm = TRUE)
+Q3 <- quantile(df$jump_height, 0.75, na.rm = TRUE)
+IQR_val <- Q3 - Q1
+lower_bound <- Q1 - 1.5 * IQR_val
+upper_bound <- Q3 + 1.5 * IQR_val
+
+outliers <- df %>%
+  filter(jump_height < lower_bound | jump_height > upper_bound) %>%
+  select(name, sex, events, jump_height, peak_propulsive_force, m_rsi)
+
+if(nrow(outliers) > 0) {
+  outliers %>%
+    arrange(desc(jump_height)) %>%
+    kable(caption = "Jump Height Outliers (IQR Method)") %>%
+    kable_styling(bootstrap_options = c("striped", "hover"))
+} else {
+  cat("No outliers detected using IQR method.\n")
+}
+```
+
+```{r outliers-boxplot}
+df %>%
+  ggplot(aes(x = sex, y = jump_height, fill = sex)) +
+  geom_boxplot(alpha = 0.7, outlier.colour = "red", outlier.size = 3) +
+  scale_fill_manual(values = c("Male" = "#0073C2FF", "Female" = "#EFC000FF")) +
+  theme_prism() +
+  labs(
+    title = "Jump Height Outliers by Sex",
+    x = "Sex",
+    y = "Jump Height (m)"
+  ) +
+  theme(legend.position = "none")
+```
+
+---
+
+# 12. Age Distribution and Performance
+
+```{r age-distribution}
+# Age summary
+df %>%
+  summarise(
+    N = n(),
+    Mean_Age = round(mean(age, na.rm = TRUE), 1),
+    SD_Age = round(sd(age, na.rm = TRUE), 1),
+    Min_Age = min(age, na.rm = TRUE),
+    Max_Age = max(age, na.rm = TRUE)
+  ) %>%
+  kable(caption = "Age Distribution") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+```{r age-plots, fig.height=8}
+# Age histogram
+p1 <- df %>%
+  ggplot(aes(x = age, fill = sex)) +
+  geom_histogram(bins = 15, alpha = 0.6, position = "identity") +
+  scale_fill_manual(values = c("Male" = "#0073C2FF", "Female" = "#EFC000FF")) +
+  theme_prism() +
+  labs(title = "Age Distribution", x = "Age (years)", y = "Frequency")
+
+# Age vs jump height
+p2 <- df %>%
+  ggplot(aes(x = age, y = jump_height, color = sex)) +
+  geom_point(size = 3, alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE) +
+  scale_color_manual(values = c("Male" = "#0073C2FF", "Female" = "#EFC000FF")) +
+  theme_prism() +
+  labs(title = "Age vs Jump Height", x = "Age (years)", y = "Jump Height (m)")
+
+# Age vs mRSI
+p3 <- df %>%
+  ggplot(aes(x = age, y = m_rsi, color = sex)) +
+  geom_point(size = 3, alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE) +
+  scale_color_manual(values = c("Male" = "#0073C2FF", "Female" = "#EFC000FF")) +
+  theme_prism() +
+  labs(title = "Age vs mRSI", x = "Age (years)", y = "mRSI")
+
+ggarrange(p1, p2, p3, ncol = 1, nrow = 3, common.legend = TRUE, legend = "right")
+```
+
+---
+
+# 13. Ridge Plots for Distributions
+
+```{r ridge-plots, fig.height=10}
+# Jump height by region
+p1 <- df %>%
+  ggplot(aes(x = jump_height, y = region, fill = region)) +
+  geom_density_ridges(alpha = 0.7, scale = 1.5) +
+  theme_ridges() +
+  labs(title = "Jump Height Distribution by Region", x = "Jump Height (m)", y = "Region") +
+  theme(legend.position = "none")
+
+# mRSI by event
+p2 <- df %>%
+  ggplot(aes(x = m_rsi, y = events, fill = events)) +
+  geom_density_ridges(alpha = 0.7, scale = 1.5) +
+  theme_ridges() +
+  labs(title = "mRSI Distribution by Event", x = "mRSI", y = "Event") +
+  theme(legend.position = "none")
+
+ggarrange(p1, p2, ncol = 1, nrow = 2)
+```
+
+---
+
+# 14. Summary Statistics Table
+
+```{r summary-table}
+# Comprehensive summary by sex
+df %>%
+  group_by(sex) %>%
+  summarise(
+    N = n(),
+    `Age (years)` = paste0(round(mean(age, na.rm = TRUE), 1), " ± ", round(sd(age, na.rm = TRUE), 1)),
+    `Weight (N)` = paste0(round(mean(system_weight, na.rm = TRUE), 1), " ± ", round(sd(system_weight, na.rm = TRUE), 1)),
+    `Jump Height (m)` = paste0(round(mean(jump_height, na.rm = TRUE), 3), " ± ", round(sd(jump_height, na.rm = TRUE), 3)),
+    `Peak Force (N)` = paste0(round(mean(peak_propulsive_force, na.rm = TRUE), 1), " ± ", round(sd(peak_propulsive_force, na.rm = TRUE), 1)),
+    `Rel. Peak Force (N/kg)` = paste0(round(mean(peak_relative_propulsive_force, na.rm = TRUE), 1), " ± ", round(sd(peak_relative_propulsive_force, na.rm = TRUE), 1)),
+    `mRSI` = paste0(round(mean(m_rsi, na.rm = TRUE), 3), " ± ", round(sd(m_rsi, na.rm = TRUE), 3)),
+    `Asymmetry (%)` = paste0(round(mean(l_r_peak_propulsive_force, na.rm = TRUE), 1), " ± ", round(sd(l_r_peak_propulsive_force, na.rm = TRUE), 1))
+  ) %>%
+  kable(caption = "Summary Statistics by Sex (Mean ± SD)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+```
+
+---
+
+# 15. Key Findings Summary
+
+## Main Observations:
+
+1. **Sample Characteristics:**
+   - Total athletes analyzed: `r nrow(df)`
+   - Males: `r sum(df$sex == "Male")`, Females: `r sum(df$sex == "Female")`
+   - Age range: `r min(df$age, na.rm = TRUE)` - `r max(df$age, na.rm = TRUE)` years
+
+2. **Jump Performance:**
+   - Overall mean jump height: `r round(mean(df$jump_height, na.rm = TRUE), 3)` m
+   - Males show higher jump heights than females (as expected)
+   - Significant variability within each sex
+
+3. **Inter-limb Asymmetry:**
+   - Mean asymmetry: `r round(mean(df$l_r_peak_propulsive_force, na.rm = TRUE), 1)`%
+   - Prevalence of moderate-to-high asymmetry warrants attention
+
+4. **Correlations:**
+   - Strong positive correlations between jump height and propulsive force metrics
+   - mRSI shows good correlation with jump performance
+
+5. **Regional Differences:**
+   - Notable variation in performance across different regions
+   - Further investigation needed to understand contributing factors
+
+---
+
+# 16. Recommendations for Further Analysis
+
+1. **Statistical Testing:**
+   - Perform independent t-tests or ANOVA to test sex and event differences
+   - Consider multivariate regression to identify predictors of jump height
+
+2. **Normative Data Development:**
+   - Create percentile ranks and z-scores for key metrics
+   - Develop sex-specific performance standards
+
+3. **Asymmetry Investigation:**
+   - Examine relationship between asymmetry and performance
+   - Investigate whether asymmetry predicts injury risk
+
+4. **Longitudinal Tracking:**
+   - Monitor changes in performance over time
+   - Assess training intervention effects
+
+---
+
+# Session Information
+
+```{r session-info}
+sessionInfo()
+```
