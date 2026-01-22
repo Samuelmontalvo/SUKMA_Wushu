@@ -1,5 +1,5 @@
 library(readr)
-Df <- read_csv("Project-Session-09_13_22-Session-09_13_22-AveragesAndTests_Countermovement_Jump.csv")
+Df <- read_csv("../data/Project-Session-09_13_22-Session-09_13_22-AveragesAndTests_Countermovement_Jump.csv")
 View(Df)
 
 library(dplyr)
@@ -21,7 +21,7 @@ View(Df_average)
 
 ## import participant details
 library(readxl)
-Df_details <- read_excel("Athletes details SUKMA XX.xlsx")
+Df_details <- read_excel("../data/Athletes details SUKMA XX.xlsx")
 View(Df_details)
 
 # change capital name letters so that data sets match
@@ -59,7 +59,7 @@ Df %>% ggplot(aes(y=jump_height,group=sex,fill=sex)) +
                                                alpha=.2) +
   stat_density_ridges(quantile_lines = TRUE, quantiles = c(0.05, 0.95),
                       alpha = 0.2) + theme_prism()
-ggsave("qqplot_FP.png")
+ggsave("../figures/qqplot_FP.png")
 
 
 
@@ -101,7 +101,7 @@ Df %>% ggplot(aes(x = sex, y = jump_height, fill = sex)) +
   ylab('Vertical Jump Height (m)')+
   xlab('Group') + theme_prism()
 
-ggsave("Vertical_jump_height.png")
+ggsave("../figures/Vertical_jump_height.png")
 
 
 
@@ -117,7 +117,7 @@ Df %>% ggplot(aes(x = events, y = jump_height, fill = sex)) +
   scale_fill_brewer(palette = "Dark2")+ theme_bw() +
   ylab('Vertical Jump Height (m)')+
   xlab('Group') + theme_prism()
-ggsave("Vertical_jump_height_bygroup_bysex.png")
+ggsave("../figures/Vertical_jump_height_bygroup_bysex.png")
 
 
 Df %>% ggplot(aes(x = events, y = jump_height, fill = events)) +
@@ -132,7 +132,7 @@ Df %>% ggplot(aes(x = events, y = jump_height, fill = events)) +
   scale_fill_brewer(palette = "Dark2")+ theme_bw() +
   ylab('Vertical Jump Height (m)')+
   xlab('Group') + theme_prism()
-ggsave("Vertical_jump_height_bygroup.png")
+ggsave("../figures/Vertical_jump_height_bygroup.png")
 
 
 library(table1)
@@ -170,7 +170,7 @@ Table_Jump_Height <- Df  %>% group_by(Sex) %>%
 # Save as word .docx
 Table_Jump_Height %>% apa_theme
 save_as_docx(Table_Jump_Height,
-             path = "Table_Jump_Height.docx",
+             path = "../outputs/Table_Jump_Height.docx",
              pr_section =
                prop_section(page_size = page_size(orient = "portrait"),
                             type = "continuous"))
