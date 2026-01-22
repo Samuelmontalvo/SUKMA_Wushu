@@ -14,28 +14,33 @@ This is an **R-based sports biomechanics research project** analyzing vertical j
 
 ```
 SUKMA_Wushu/
+├── CLAUDE.md                    # AI assistant guide (this document)
 ├── SUKMA_Wushu.Rproj           # R Project configuration
-├── Script.R                     # Main analysis script (231 lines)
-├── Script.Rmd                   # Secondary R Markdown analysis (159 lines)
-├── Normative Jump Data Malaysia.Rmd  # Comprehensive analysis (2,742 lines)
+├── .gitignore                   # Git ignore rules
 │
-├── Data Files/
+├── data/                        # All data files
 │   ├── SUKMA_Wushu_Data.csv                    # Processed dataset (100 KB)
 │   ├── Athletes details SUKMA XX.xlsx           # Athlete metadata (18 KB)
 │   ├── Project-Session-09_13_22-...-Countermovement_Jump.csv  # Raw measurements (346 KB)
 │   └── SUKMA.xlsx                              # Additional data (277 KB)
 │
-├── Output Files/
+├── scripts/                     # R analysis scripts
+│   ├── Script.R                                # Main analysis script (231 lines)
+│   ├── Script.Rmd                              # Secondary R Markdown analysis (159 lines)
+│   └── Normative Jump Data Malaysia.Rmd        # Comprehensive analysis (2,742 lines)
+│
+├── outputs/                     # Generated reports and documents
 │   ├── Normative-Jump-Data-Malaysia.html       # Main HTML report (6 MB)
 │   ├── Normative-Jump-Data-Malaysia.docx       # Word document (117 KB)
 │   ├── Table_Jump_Height.docx                  # Exported table
-│   ├── Vertical_jump_height.png                # Key visualization (181 KB)
-│   ├── Table1groups.jpeg                       # Summary table
-│   ├── Table1groupsbygender.jpeg               # Gender-stratified table
 │   └── NSCA_abstract                           # Conference abstract image
 │
-└── Generated Figures/
-    └── Normative-Jump-Data-Malaysia_files/figure-docx/  # 13 PNG images
+└── figures/                     # Plots and visualizations
+    ├── Table1groups.jpeg                       # Summary table
+    ├── Table1groupsbygender.jpeg               # Gender-stratified table
+    ├── Vertical_jump_height.png                # Key visualization (181 KB)
+    └── Normative-Jump-Data-Malaysia_files/     # Generated figures folder
+        └── figure-docx/                        # 13 PNG images
 ```
 
 ---
@@ -133,10 +138,10 @@ Performance levels are color-coded in visualizations (green = excellent, red = p
 
 **To render/compile an .Rmd file:**
 ```r
-# In R console or RStudio
-rmarkdown::render("Normative Jump Data Malaysia.Rmd")
+# In R console or RStudio (from project root)
+rmarkdown::render("scripts/Normative Jump Data Malaysia.Rmd")
 
-# Or use RStudio's "Knit" button
+# Or use RStudio's "Knit" button (when file is open)
 ```
 
 **To generate Word documents:**
@@ -182,17 +187,24 @@ ggsave(
 ### Data Updates
 
 **To add new athlete data:**
-1. Update `Athletes details SUKMA XX.xlsx` with new rows
+1. Update `data/Athletes details SUKMA XX.xlsx` with new rows
 2. Ensure column names match existing structure
 3. Re-run the analysis pipeline
 4. Verify merge succeeded (check row counts)
 
 **To incorporate new jump test data:**
 1. Export raw data from force plate system
-2. Place CSV in project directory
-3. Update file path in .Rmd `read_csv()` call
+2. Place CSV in `data/` directory
+3. Update file path in .Rmd `read_csv()` call (use relative path from scripts folder)
 4. Ensure column names match expected format
 5. Re-render analysis
+
+**File Path Convention:**
+- All R scripts are in `scripts/` directory
+- All data files are in `data/` directory
+- All outputs go to `outputs/` directory
+- All figures go to `figures/` directory
+- Use relative paths: `../data/filename.csv` when reading from scripts
 
 ---
 
@@ -546,10 +558,10 @@ unique(Df$event)
 ## Quick Start for AI Assistants
 
 1. **Familiarize** yourself with R/R Markdown if not already proficient
-2. **Read** `Normative Jump Data Malaysia.Rmd` to understand the full analysis pipeline
+2. **Read** `scripts/Normative Jump Data Malaysia.Rmd` to understand the full analysis pipeline
 3. **Check** the current branch: `git branch` (should be `claude/add-claude-documentation-ECXoX`)
-4. **Review** existing visualizations in `Normative-Jump-Data-Malaysia.html`
-5. **Understand** the data structure by examining `SUKMA_Wushu_Data.csv`
+4. **Review** existing visualizations in `outputs/Normative-Jump-Data-Malaysia.html`
+5. **Understand** the data structure by examining `data/SUKMA_Wushu_Data.csv`
 6. **Ask clarifying questions** before making significant changes
 7. **Test changes** by rendering the .Rmd file
 8. **Commit and push** to the designated Claude branch when complete
@@ -558,6 +570,7 @@ unique(Df$event)
 
 ## Version History
 
+- **v1.1** (2026-01-22) - Reorganized repository into professional folder structure (data, scripts, outputs, figures)
 - **v1.0** (2026-01-21) - Initial CLAUDE.md creation with comprehensive project documentation
 
 ---

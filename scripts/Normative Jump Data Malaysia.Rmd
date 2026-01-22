@@ -26,7 +26,7 @@ library(factoextra)
 ```
 
 ```{r}
-Df <- read_csv("Project-Session-09_13_22-Session-09_13_22-AveragesAndTests_Countermovement_Jump.csv")
+Df <- read_csv("../data/Project-Session-09_13_22-Session-09_13_22-AveragesAndTests_Countermovement_Jump.csv")
 
 ## Reduce jump trials to average
 Df_average <- Df %>% filter(TestId == "AVERAGE")
@@ -45,7 +45,7 @@ Names of participants and sex needs to be join into the main jump dataset to hav
 ```{r, error=FALSE,message=FALSE, warning = FALSE}
 ## import participant details
 library(readxl)
-Df_details <- read_excel("Athletes details SUKMA XX.xlsx")
+Df_details <- read_excel("../data/Athletes details SUKMA XX.xlsx")
 
 # change capital name letters so that data sets match
 Df_details <- Df_details %>% rename(name = NAME)
@@ -711,8 +711,8 @@ male_plot <- create_single_column_plot(Df, "Male")
 female_plot <- create_single_column_plot(Df, "Female")
 
 # Save the plots
-ggsave("male_single_column.png", male_plot, width = 8, height = 12)
-ggsave("female_single_column.png", female_plot, width = 8, height = 12)
+ggsave("../figures/male_single_column.png", male_plot, width = 8, height = 12)
+ggsave("../figures/female_single_column.png", female_plot, width = 8, height = 12)
 
 # Side by side plots for both sexes
 combined_sexes <- plot_grid(
@@ -722,7 +722,7 @@ combined_sexes <- plot_grid(
   rel_widths = c(1, 1)
 )
 
-ggsave("combined_sexes_single_column.png", combined_sexes, width = 16, height = 12)
+ggsave("../figures/combined_sexes_single_column.png", combined_sexes, width = 16, height = 12)
 ```
 
 
@@ -965,7 +965,7 @@ p2 <- Df_female %>%
   scale_x_continuous(breaks = seq(0, max(Df_female$Tscore), by = 10))
 
 ggplotly(p2)
-ggsave("p2.png")
+ggsave("../figures/p2.png")
 ```
 
 Notice that we don't have a "very good" due to the zscore and the low sample size, those that section has been silenced (#), this should be improved with a larger sample size. For a larger sample remove the #, and add a closure ")"
@@ -1096,7 +1096,7 @@ unlink("table_female.html")
 ```{r,fig.width=10}
 ggarrange(p1,p2)+ theme_prism()
 
-ggsave("normative_bysex.png")
+ggsave("../figures/normative_bysex.png")
 ```
 
 
@@ -1433,7 +1433,7 @@ p2 <- Df_female_mrsi %>%
   labs(title = "Female", y = "mRSI")
 
 ggplotly(p2)
-#ggsave("p2.png")
+#ggsave("../figures/p2.png")
 ```
 
 Notice that we don't have a "very good" due to the zscore and the low sample size, those that section has been silenced (#), this should be improved with a larger sample size. For a larger sample remove the #, and add a closure ")"
@@ -1569,7 +1569,7 @@ unlink("table_female_mrsi.html")
 ```{r,fig.width=10}
 ggarrange(p1,p2)+ theme_prism()
 
-ggsave("normative_mrsi_bysex.png")
+ggsave("../figures/normative_mrsi_bysex.png")
 ```
 
 
@@ -1796,7 +1796,7 @@ p2 <- Df_female_RPNI %>%
   labs(title = "Female", y = "Relative Net Impulse (Ns/kg)")
 
 ggplotly(p2)
-#ggsave("p2.png")
+#ggsave("../figures/p2.png")
 ```
 
 Notice that we don't have a "very good" due to the zscore and the low sample size, those that section has been silenced (#), this should be improved with a larger sample size. For a larger sample remove the #, and add a closure ")"
@@ -1923,7 +1923,7 @@ unlink("table_female.html")
 ```{r,fig.width=10}
 ggarrange(p1,p2)+ theme_prism()
 
-ggsave("normative_RNPI_bysex.png")
+ggsave("../figures/normative_RNPI_bysex.png")
 ```
 
 
@@ -2158,7 +2158,7 @@ p2 <- Df_female_rp_force %>%
   labs(title = "Female", y = "Relative Peak Propulsive Power (W/kg)")
 
 ggplotly(p2)
-#ggsave("p2.png")
+#ggsave("../figures/p2.png")
 ```
 
 Notice that we don't have a "very good" due to the zscore and the low sample size, those that section has been silenced (#), this should be improved with a larger sample size. For a larger sample remove the #, and add a closure ")"
@@ -2289,7 +2289,7 @@ unlink("table_female.html")
 ```{r,fig.width=10}
 ggarrange(p1,p2)+ theme_prism()
 
-ggsave("normative_rp_Force_bysex.png")
+ggsave("../figures/normative_rp_Force_bysex.png")
 ```
 
 
@@ -2541,7 +2541,7 @@ p2 <- Df_female_rp_braking_force %>%
   labs(title = "Female", y = "Relative Peak Propulsive Power (W/kg)")
 
 ggplotly(p2)
-#ggsave("p2.png")
+#ggsave("../figures/p2.png")
 ```
 
 Notice that we don't have a "very good" due to the zscore and the low sample size, those that section has been silenced (#), this should be improved with a larger sample size. For a larger sample remove the #, and add a closure ")"
@@ -2672,7 +2672,7 @@ unlink("table_female.html")
 ```{r,fig.width=10}
 ggarrange(p1,p2)+ theme_prism()
 
-ggsave("normative_peak_bForce_bysex.png")
+ggsave("../figures/normative_peak_bForce_bysex.png")
 ```
 
 
